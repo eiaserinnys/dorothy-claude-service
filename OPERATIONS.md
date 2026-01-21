@@ -141,7 +141,7 @@ sudo journalctl -u dorothy-claude-service -n 50 --no-pager
 # 수동 실행으로 에러 확인
 cd /home/eias/dorothy-claude-service/current
 source .venv/bin/activate
-uvicorn src.main:app --host 127.0.0.1 --port 8090
+uvicorn src.main:app --host 127.0.0.1 --port 8090 --loop uvloop
 ```
 
 ### 인증 실패

@@ -53,7 +53,7 @@ export CLAUDE_SERVICE_TOKEN="your-secret-token"
 export ANTHROPIC_API_KEY="your-anthropic-key"
 
 # 서버 실행 (개발 모드)
-uvicorn src.main:app --reload --port 8080
+uvicorn src.main:app --reload --port 8080 --loop uvloop
 ```
 
 ### Docker 실행

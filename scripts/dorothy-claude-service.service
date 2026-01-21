@@ -9,7 +9,7 @@ Type=simple
 User=eias
 Group=eias
 WorkingDirectory=/home/eias/dorothy-claude-service/current
-ExecStart=/home/eias/dorothy-claude-service/current/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8090
+ExecStart=/home/eias/dorothy-claude-service/current/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8090 --loop uvloop
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/eias/dorothy-claude-service/shared/.env
 
