@@ -1,0 +1,144 @@
+name: Deploy to Linode
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # 수동 실행 가능
+
+env:
+  DEPLOY_DIR: /home/eias/dorothy-claude-service
+  RELEASES_DIR: /home/eias/dorothy-claude-service/releases
+  SHARED_DIR: /home/eias/dorothy-claude-service/shared
+  KEEP_RELEASES: 5
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Discord 알림 (배포 시작)
+        run: |
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\": [{\"title\": \"🚀 배포 시작 | dorothy-claude-service\", \"color\": 3447003, \"fields\": [{\"name\": \"브랜치\", \"value\": \"\`${{ github.ref_name }}\`\", \"inline\": true}, {\"name\": \"커밋\", \"value\": \"[\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": true}, {\"name\": \"실행자\", \"value\": \"${{ github.actor }}\", \"inline\": true}]}]}" \
+            ${{ secrets.DISCORD_WEBHOOK_URL }} || true
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.LINODE_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.LINODE_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create new release
+        id: release
+        run: |
+          RELEASE_NAME=$(date +%Y-%m-%d-%H%M%S)
+          echo "name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "Release name: $RELEASE_NAME"
+
+      - name: Deploy to server
+        env:
+          RELEASE_NAME: ${{ steps.release.outputs.name }}
+        run: |
+          RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
+          SSH_CMD="ssh -i ~/.ssh/id_ed25519 ${{ secrets.LINODE_USER }}@${{ secrets.LINODE_HOST }}"
+
+          echo "=== 1. 새 릴리즈 디렉토리 생성 ==="
+          $SSH_CMD "mkdir -p $RELEASE_DIR"
+
+          echo "=== 2. 파일 동기화 ==="
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude '.venv' \
+            --exclude '.env' \
+            --exclude '__pycache__' \
+            --exclude '.pytest_cache' \
+            -e "ssh -i ~/.ssh/id_ed25519" \
+            ./ ${{ secrets.LINODE_USER }}@${{ secrets.LINODE_HOST }}:${RELEASE_DIR}/
+
+          echo "=== 3. shared 자원 심볼릭 링크 ==="
+          $SSH_CMD "
+            ln -sfn ${SHARED_DIR}/.env ${RELEASE_DIR}/.env
+            ln -sfn ${SHARED_DIR}/.venv ${RELEASE_DIR}/.venv
+          "
+
+      - name: Update dependencies
+        env:
+          RELEASE_NAME: ${{ steps.release.outputs.name }}
+        run: |
+          RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
+          SSH_CMD="ssh -i ~/.ssh/id_ed25519 ${{ secrets.LINODE_USER }}@${{ secrets.LINODE_HOST }}"
+
+          $SSH_CMD "
+            cd ${RELEASE_DIR}
+            source .venv/bin/activate
+
+            echo '=== Installing requirements ==='
+            pip install -q --upgrade -r requirements.txt
+          "
+
+      - name: Switch to new release
+        env:
+          RELEASE_NAME: ${{ steps.release.outputs.name }}
+        run: |
+          RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
+          SSH_CMD="ssh -i ~/.ssh/id_ed25519 ${{ secrets.LINODE_USER }}@${{ secrets.LINODE_HOST }}"
+
+          echo "=== 4. 심볼릭 링크 전환 (원자적) ==="
+          $SSH_CMD "ln -sfn ${RELEASE_DIR} ${DEPLOY_DIR}/current"
+
+          echo "=== 5. 서비스 재시작 ==="
+          $SSH_CMD "sudo systemctl restart dorothy-claude-service.service"
+
+          sleep 3
+
+          echo "=== 6. 서비스 상태 확인 ==="
+          $SSH_CMD "sudo systemctl status dorothy-claude-service.service --no-pager" || true
+
+          echo "=== 7. 헬스 체크 ==="
+          $SSH_CMD "curl -s http://127.0.0.1:8090/health | python3 -m json.tool" || true
+
+          echo "=== 8. 정상 릴리즈 기록 ==="
+          $SSH_CMD "echo '${RELEASE_NAME}' > ${DEPLOY_DIR}/.last_good_release"
+
+      - name: Cleanup old releases
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/id_ed25519 ${{ secrets.LINODE_USER }}@${{ secrets.LINODE_HOST }}"
+
+          echo "=== 오래된 릴리즈 정리 (최근 ${KEEP_RELEASES}개 유지) ==="
+          $SSH_CMD "
+            cd ${RELEASES_DIR}
+
+            # 마지막 정상 릴리즈 확인
+            LAST_GOOD=\$(cat ${DEPLOY_DIR}/.last_good_release 2>/dev/null || echo '')
+
+            # 정리 대상 선정 (최근 N개 제외, 정상 릴리즈 제외)
+            for release in \$(ls -t | tail -n +\$((${KEEP_RELEASES} + 1))); do
+              if [ \"\$release\" != \"\$LAST_GOOD\" ]; then
+                echo \"Removing: \$release\"
+                rm -rf \"\$release\"
+              else
+                echo \"Preserving last good release: \$release\"
+              fi
+            done
+
+            echo 'Remaining releases:'
+            ls -t
+          "
+
+      - name: Discord 알림 (배포 성공)
+        if: success()
+        run: |
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\": [{\"title\": \"✅ 배포 완료 | dorothy-claude-service\", \"color\": 5763719, \"fields\": [{\"name\": \"브랜치\", \"value\": \"\`${{ github.ref_name }}\`\", \"inline\": true}, {\"name\": \"커밋\", \"value\": \"[\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": true}]}]}" \
+            ${{ secrets.DISCORD_WEBHOOK_URL }} || true
+
+      - name: Discord 알림 (배포 실패)
+        if: failure()
+        run: |
+          curl -s -H "Content-Type: application/json" \
+            -d "{\"embeds\": [{\"title\": \"❌ 배포 실패 | dorothy-claude-service\", \"color\": 15548997, \"fields\": [{\"name\": \"브랜치\", \"value\": \"\`${{ github.ref_name }}\`\", \"inline\": true}, {\"name\": \"커밋\", \"value\": \"[\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": true}, {\"name\": \"워크플로우\", \"value\": \"[로그 보기](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\", \"inline\": true}]}]}" \
+            ${{ secrets.DISCORD_WEBHOOK_URL }} || true
