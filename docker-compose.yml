@@ -1,0 +1,86 @@
+# Claude Code Service - Docker Compose 설정
+#
+# 개발 환경에서 서비스를 실행하기 위한 설정입니다.
+# 프로덕션 환경에서는 systemd 서비스로 실행합니다.
+
+services:
+  # Claude Code Service (FastAPI)
+  claude-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-code-service
+    ports:
+      - "8080:8080"
+    environment:
+      # API 인증 토큰 (프로덕션에서는 .env 파일로 분리)
+      - CLAUDE_SERVICE_TOKEN=${CLAUDE_SERVICE_TOKEN}
+      # Anthropic API 키 (Claude Code가 사용)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # 동시 세션 제한
+      - MAX_CONCURRENT_SESSIONS=3
+      # 로그 레벨
+      - LOG_LEVEL=INFO
+      # 작업 디렉토리 (호스트 마운트 필요)
+      - WORKSPACE_DIR=/workspace
+    volumes:
+      # 작업 디렉토리 마운트 (호스트의 claude-workspace)
+      - ${WORKSPACE_DIR:-/home/eias/claude-workspace}:/workspace:rw
+      # 첨부 파일 임시 디렉토리
+      - claude-attachments:/tmp/claude-code-attachments
+      # Claude Code CLI 설정 (호스트의 ~/.claude)
+      - ${HOME}/.claude:/root/.claude:ro
+      # SSH 키 (git 작업용)
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # Git 설정
+      - ${HOME}/.gitconfig:/root/.gitconfig:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    # Claude Code는 시스템 리소스를 많이 사용함
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - claude-network
+
+  # Redis (선택적 - 세션 상태 영속화용)
+  # 초기 버전에서는 인메모리로 관리하고, 필요시 활성화
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: claude-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #   restart: unless-stopped
+  #   networks:
+  #     - claude-network
+
+volumes:
+  claude-attachments:
+    driver: local
+  # redis-data:
+  #   driver: local
+
+networks:
+  claude-network:
+    driver: bridge
+    name: claude-network
