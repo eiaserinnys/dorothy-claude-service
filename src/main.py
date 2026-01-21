@@ -6,34 +6,59 @@ Discord Bot에서 REST API로 호출하는 Claude Code 실행 서비스.
 
 import os
 import time
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# TODO: Import routers when implemented
-# from src.api import sessions, attachments, health
+from src.api import sessions_router, attachments_router
+from src.service import session_manager, resource_manager, file_manager
+from src.models import SessionResponse, StatusResponse, HealthResponse
+
+# 로깅 설정
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # 서비스 시작 시간 (uptime 계산용)
 _start_time = time.time()
+
+# 버전
+VERSION = "0.1.0"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
     # Startup
-    print("🚀 Claude Code Service starting...")
-    # TODO: Initialize services (SessionManager, ResourceManager, etc.)
+    logger.info("🚀 Claude Code Service starting...")
+    logger.info(f"  Version: {VERSION}")
+    logger.info(f"  Max concurrent sessions: {resource_manager.max_concurrent}")
+    logger.info(f"  Workspace: {os.getenv('WORKSPACE_DIR', '/home/eias/claude-workspace')}")
+
     yield
+
     # Shutdown
-    print("👋 Claude Code Service shutting down...")
-    # TODO: Cleanup active sessions
+    logger.info("👋 Claude Code Service shutting down...")
+
+    # 활성 세션 종료
+    terminated = await session_manager.terminate_all()
+    if terminated > 0:
+        logger.info(f"  Terminated {terminated} active sessions")
+
+    # 오래된 첨부 파일 정리
+    cleaned = file_manager.cleanup_old_files(max_age_hours=1)
+    if cleaned > 0:
+        logger.info(f"  Cleaned up {cleaned} attachment directories")
 
 
 app = FastAPI(
     title="Claude Code Service",
     description="REST API for Claude Code execution",
-    version="0.1.0",
+    version=VERSION,
     lifespan=lifespan,
 )
 
@@ -47,38 +72,52 @@ app.add_middleware(
 )
 
 
-# Health check endpoint
-@app.get("/health")
+# === Health & Status Endpoints ===
+
+@app.get("/health", response_model=HealthResponse, tags=["health"])
 async def health_check():
     """헬스 체크 엔드포인트"""
-    return {
-        "status": "healthy",
-        "version": "0.1.0",
-        "uptime_seconds": int(time.time() - _start_time),
-    }
+    return HealthResponse(
+        status="healthy",
+        version=VERSION,
+        uptime_seconds=int(time.time() - _start_time),
+    )
 
 
-# Status endpoint
-@app.get("/status")
+@app.get("/status", response_model=StatusResponse, tags=["health"])
 async def get_status():
     """서비스 상태 조회"""
-    # TODO: Implement with SessionManager
-    return {
-        "active_sessions": 0,
-        "max_concurrent": int(os.getenv("MAX_CONCURRENT_SESSIONS", "3")),
-        "sessions": [],
-    }
+    active_sessions = session_manager.get_active_sessions()
+
+    return StatusResponse(
+        active_sessions=len(active_sessions),
+        max_concurrent=resource_manager.max_concurrent,
+        sessions=[
+            SessionResponse(
+                session_id=s.session_id,
+                thread_id=s.thread_id,
+                status=s.status,
+                user=s.user,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
+            )
+            for s in active_sessions
+        ],
+    )
 
 
-# TODO: Include routers
-# app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
-# app.include_router(attachments.router, prefix="/attachments", tags=["attachments"])
+# === API Routers ===
+
+app.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
+app.include_router(attachments_router, prefix="/attachments", tags=["attachments"])
 
 
-# Global exception handler
+# === Exception Handlers ===
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """전역 예외 핸들러"""
+    logger.exception(f"Unhandled exception: {exc}")
     return JSONResponse(
         status_code=500,
         content={
