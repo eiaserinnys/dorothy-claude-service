@@ -6,9 +6,9 @@ on:
   workflow_dispatch:  # 수동 실행 가능
 
 env:
-  DEPLOY_DIR: /home/eias/dorothy-claude-service
-  RELEASES_DIR: /home/eias/dorothy-claude-service/releases
-  SHARED_DIR: /home/eias/dorothy-claude-service/shared
+  DEPLOY_DIR: /home/eias/services/dorothy-claude-service
+  RELEASES_DIR: /home/eias/services/dorothy-claude-service/releases
+  SHARED_DIR: /home/eias/services/dorothy-claude-service/shared
   KEEP_RELEASES: 5
 
 jobs:
