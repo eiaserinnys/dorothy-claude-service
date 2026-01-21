@@ -107,6 +107,7 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     uptime_seconds: int
+    environment: Optional[str] = None
 
 
 class StatusResponse(BaseModel):

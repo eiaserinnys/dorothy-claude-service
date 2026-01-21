@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Dorothy Claude Service Health Check periodically
+
+[Timer]
+# 매 5분마다 실행
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

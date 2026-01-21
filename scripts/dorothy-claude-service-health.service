@@ -1,0 +1,10 @@
+[Unit]
+Description=Dorothy Claude Service Health Check
+After=network.target dorothy-claude-service.service
+
+[Service]
+Type=oneshot
+User=eias
+Group=eias
+ExecStart=/home/eias/dorothy-claude-service/current/scripts/health-check.sh
+EnvironmentFile=-/home/eias/dorothy-claude-service/shared/.env

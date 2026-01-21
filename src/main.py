@@ -4,7 +4,6 @@ Claude Code Service - FastAPI Application
 Discord Bot에서 REST API로 호출하는 Claude Code 실행 서비스.
 """
 
-import os
 import time
 import logging
 from contextlib import asynccontextmanager
@@ -15,19 +14,16 @@ from fastapi.responses import JSONResponse
 from src.api import sessions_router, attachments_router
 from src.service import session_manager, resource_manager, file_manager
 from src.models import SessionResponse, StatusResponse, HealthResponse
+from src.config import get_settings, setup_logging
+
+# 설정 로드
+settings = get_settings()
 
 # 로깅 설정
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
+logger = setup_logging(settings)
 
 # 서비스 시작 시간 (uptime 계산용)
 _start_time = time.time()
-
-# 버전
-VERSION = "0.1.0"
 
 
 @asynccontextmanager
@@ -35,9 +31,10 @@ async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
     # Startup
     logger.info("🚀 Claude Code Service starting...")
-    logger.info(f"  Version: {VERSION}")
+    logger.info(f"  Version: {settings.version}")
+    logger.info(f"  Environment: {settings.environment}")
     logger.info(f"  Max concurrent sessions: {resource_manager.max_concurrent}")
-    logger.info(f"  Workspace: {os.getenv('WORKSPACE_DIR', '/home/eias/claude-workspace')}")
+    logger.info(f"  Workspace: {settings.workspace_dir}")
 
     yield
 
@@ -58,14 +55,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Claude Code Service",
     description="REST API for Claude Code execution",
-    version=VERSION,
+    version=settings.version,
     lifespan=lifespan,
+    # 프로덕션에서는 OpenAPI 문서 비활성화
+    docs_url="/docs" if not settings.is_production else None,
+    redoc_url="/redoc" if not settings.is_production else None,
 )
 
-# CORS 설정 (내부 네트워크용)
+# CORS 설정
+# 프로덕션: localhost만 허용 (같은 서버에서만 접근)
+# 개발: 모든 origin 허용
+_allowed_origins = ["http://localhost:*", "http://127.0.0.1:*"] if settings.is_production else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 프로덕션에서는 제한
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -79,8 +82,9 @@ async def health_check():
     """헬스 체크 엔드포인트"""
     return HealthResponse(
         status="healthy",
-        version=VERSION,
+        version=settings.version,
         uptime_seconds=int(time.time() - _start_time),
+        environment=settings.environment,
     )
 
 
@@ -135,7 +139,8 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "src.main:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "8080")),
-        reload=True,
+        host=settings.host,
+        port=settings.port,
+        reload=settings.is_development,
+        access_log=not settings.is_production,
     )
