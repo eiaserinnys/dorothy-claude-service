@@ -299,7 +299,8 @@ class ClaudeCodeRunner:
 
             yield CompleteEvent(
                 result=final_text,
-                attachments=attachments
+                attachments=attachments,
+                claude_session_id=session_id
             )
 
         except asyncio.TimeoutError:

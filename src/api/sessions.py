@@ -228,7 +228,8 @@ async def execute_query(
                         await session_manager.update_status(
                             session_id,
                             SessionStatus.COMPLETED,
-                            result=event.result
+                            result=event.result,
+                            claude_session_id=event.claude_session_id
                         )
                     elif event.type == "error":
                         await session_manager.update_status(

@@ -159,6 +159,7 @@ class CompleteEvent(BaseModel):
     type: str = "complete"
     result: str
     attachments: List[str] = Field(default_factory=list)
+    claude_session_id: Optional[str] = Field(None, description="Claude Code 세션 ID (다음 쿼리에서 resume용)")
 
 
 class ErrorEvent(BaseModel):
