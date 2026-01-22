@@ -21,6 +21,12 @@ from .schemas import (
     InterventionSentEvent,
     CompleteEvent,
     ErrorEvent,
+    # Task API (v2)
+    TaskStatus,
+    ExecuteRequest,
+    TaskResponse,
+    TaskListResponse,
+    TaskInterveneRequest,
 )
 
 __all__ = [
@@ -45,4 +51,10 @@ __all__ = [
     "InterventionSentEvent",
     "CompleteEvent",
     "ErrorEvent",
+    # Task API (v2)
+    "TaskStatus",
+    "ExecuteRequest",
+    "TaskResponse",
+    "TaskListResponse",
+    "TaskInterveneRequest",
 ]

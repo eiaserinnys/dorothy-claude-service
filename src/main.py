@@ -4,15 +4,19 @@ Claude Code Service - FastAPI Application
 Discord Bot에서 REST API로 호출하는 Claude Code 실행 서비스.
 """
 
+import asyncio
 import time
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.api import sessions_router, attachments_router
+from src.api.tasks import router as tasks_router
 from src.service import session_manager, resource_manager, file_manager
+from src.service.task_manager import init_task_manager, get_task_manager
 from src.models import SessionResponse, StatusResponse, HealthResponse
 from src.config import get_settings, setup_logging
 
@@ -25,10 +29,30 @@ logger = setup_logging(settings)
 # 서비스 시작 시간 (uptime 계산용)
 _start_time = time.time()
 
+# 백그라운드 태스크 참조
+_cleanup_task = None
+
+
+async def periodic_cleanup():
+    """주기적 태스크 정리 (24시간 이상 된 완료 태스크)"""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # 1시간마다 실행
+            task_manager = get_task_manager()
+            cleaned = await task_manager.cleanup_old_tasks(max_age_hours=24)
+            if cleaned > 0:
+                logger.info(f"Periodic cleanup: removed {cleaned} old tasks")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Periodic cleanup error: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """애플리케이션 라이프사이클 관리"""
+    global _cleanup_task
+
     # Startup
     logger.info("🚀 Claude Code Service starting...")
     logger.info(f"  Version: {settings.version}")
@@ -36,15 +60,41 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Max concurrent sessions: {resource_manager.max_concurrent}")
     logger.info(f"  Workspace: {settings.workspace_dir}")
 
+    # TaskManager 초기화 및 로드
+    storage_path = Path(settings.workspace_dir) / "data" / "tasks.json"
+    task_manager = init_task_manager(storage_path=storage_path)
+    loaded = await task_manager.load()
+    logger.info(f"  Loaded {loaded} tasks from storage")
+
+    # 주기적 정리 태스크 시작
+    _cleanup_task = asyncio.create_task(periodic_cleanup())
+    logger.info("  Started periodic cleanup task")
+
     yield
 
     # Shutdown
     logger.info("👋 Claude Code Service shutting down...")
 
-    # 활성 세션 종료
+    # 주기적 정리 태스크 중지
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+    # 활성 세션 종료 (기존 세션 기반 - 향후 제거 예정)
     terminated = await session_manager.terminate_all()
     if terminated > 0:
         logger.info(f"  Terminated {terminated} active sessions")
+
+    # TaskManager 저장
+    try:
+        task_manager = get_task_manager()
+        await task_manager._save()
+        logger.info("  Saved tasks to storage")
+    except RuntimeError:
+        pass  # TaskManager가 초기화되지 않은 경우
 
     # 오래된 첨부 파일 정리
     cleaned = file_manager.cleanup_old_files(max_age_hours=1)
@@ -112,6 +162,10 @@ async def get_status():
 
 # === API Routers ===
 
+# Task API (v2) - 새 태스크 기반 API
+app.include_router(tasks_router, tags=["tasks"])
+
+# Legacy API - 기존 세션 기반 API (향후 제거 예정)
 app.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
 app.include_router(attachments_router, prefix="/attachments", tags=["attachments"])
 

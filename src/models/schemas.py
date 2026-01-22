@@ -166,3 +166,46 @@ class ErrorEvent(BaseModel):
     """오류 이벤트"""
     type: str = "error"
     message: str
+
+
+# === Task API Models (v2) ===
+
+class TaskStatus(str, Enum):
+    """태스크 상태"""
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+
+
+class ExecuteRequest(BaseModel):
+    """실행 요청 (새 API)"""
+    client_id: str = Field(..., description="클라이언트 ID (e.g., 'dorothy_bot')")
+    request_id: str = Field(..., description="요청 ID (e.g., Discord thread ID)")
+    prompt: str = Field(..., description="실행할 프롬프트")
+    resume_session_id: Optional[str] = Field(None, description="이전 Claude 세션 ID (대화 연속성용)")
+    attachment_paths: Optional[List[str]] = Field(None, description="첨부 파일 경로 목록")
+
+
+class TaskResponse(BaseModel):
+    """태스크 정보 응답"""
+    client_id: str
+    request_id: str
+    status: TaskStatus
+    result: Optional[str] = None
+    error: Optional[str] = None
+    claude_session_id: Optional[str] = None
+    result_delivered: bool = False
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class TaskListResponse(BaseModel):
+    """태스크 목록 응답"""
+    tasks: List[TaskResponse]
+
+
+class TaskInterveneRequest(BaseModel):
+    """개입 메시지 요청 (새 API)"""
+    text: str = Field(..., description="메시지 텍스트")
+    user: str = Field(..., description="요청한 사용자")
+    attachment_paths: Optional[List[str]] = Field(None, description="첨부 파일 경로 목록")
