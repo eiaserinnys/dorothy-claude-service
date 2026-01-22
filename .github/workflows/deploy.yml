@@ -7,7 +7,7 @@ on:
 
 env:
   # 서버에서의 배포 경로 (GitHub Secrets로 관리 가능)
-  DEPLOY_DIR: ${{ secrets.DEPLOY_DIR || '/home/eias/dorothy-claude-service' }}
+  DEPLOY_DIR: ${{ secrets.DEPLOY_DIR || '/home/eias/services/dorothy-claude-service' }}
   WORKSPACE_DIR: ${{ secrets.WORKSPACE_DIR || '/home/eias/claude-workspace' }}
   KEEP_RELEASES: 5
 
