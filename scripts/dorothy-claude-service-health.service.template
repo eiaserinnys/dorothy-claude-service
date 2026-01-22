@@ -1,0 +1,10 @@
+[Unit]
+Description=Dorothy Claude Service Health Check
+After=network.target dorothy-claude-service.service
+
+[Service]
+Type=oneshot
+User=__USER__
+Group=__GROUP__
+ExecStart=__SERVICE_DIR__/current/scripts/health-check.sh
+EnvironmentFile=-__SERVICE_DIR__/shared/.env

@@ -79,7 +79,7 @@ class ClaudeCodeRunner:
             workspace_dir: Claude Code 작업 디렉토리
         """
         self._workspace_dir = workspace_dir or os.getenv(
-            "WORKSPACE_DIR", "/home/eias/claude-workspace"
+            "WORKSPACE_DIR", "/workspace"
         )
 
     def _sanitize_output(self, text: str) -> str:

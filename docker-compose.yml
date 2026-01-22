@@ -24,8 +24,8 @@ services:
       # 작업 디렉토리 (호스트 마운트 필요)
       - WORKSPACE_DIR=/workspace
     volumes:
-      # 작업 디렉토리 마운트 (호스트의 claude-workspace)
-      - ${WORKSPACE_DIR:-/home/eias/claude-workspace}:/workspace:rw
+      # 작업 디렉토리 마운트 (호스트 경로 설정 필요)
+      - ${WORKSPACE_DIR:?WORKSPACE_DIR must be set}:/workspace:rw
       # 첨부 파일 임시 디렉토리
       - claude-attachments:/tmp/claude-code-attachments
       # Claude Code CLI 설정 (호스트의 ~/.claude)

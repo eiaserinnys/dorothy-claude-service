@@ -7,7 +7,7 @@
 | 서비스명 | `dorothy-claude-service` |
 | 포트 | 8090 (localhost 전용) |
 | 프로토콜 | HTTP (REST API + SSE) |
-| 프로덕션 경로 | `/home/eias/dorothy-claude-service/` |
+| 프로덕션 경로 | `$SERVICE_DIR` (환경에 따라 설정) |
 | systemd 유닛 | `dorothy-claude-service.service` |
 
 ## 기본 명령어
@@ -41,20 +41,20 @@ curl -s http://127.0.0.1:8090/status | python3 -m json.tool
 ## 프로덕션 구조
 
 ```
-/home/eias/dorothy-claude-service/
-├── current -> releases/YYYYMMDD_HHMMSS/  # 현재 활성 릴리즈
+$SERVICE_DIR/                               # 예: /opt/dorothy-claude-service
+├── current -> releases/YYYYMMDD_HHMMSS/   # 현재 활성 릴리즈
 ├── releases/                              # 릴리즈 이력
 │   └── YYYYMMDD_HHMMSS/
 │       ├── src/
-│       ├── .venv/
 │       └── .env -> ../shared/.env
 └── shared/
-    └── .env                               # 환경변수 (릴리즈간 공유)
+    ├── .env                               # 환경변수 (릴리즈간 공유)
+    └── .venv/                             # 가상환경 (릴리즈간 공유)
 ```
 
 ## 환경변수
 
-위치: `/home/eias/dorothy-claude-service/shared/.env`
+위치: `$SERVICE_DIR/shared/.env`
 
 | 변수 | 설명 |
 |------|------|
@@ -67,40 +67,20 @@ curl -s http://127.0.0.1:8090/status | python3 -m json.tool
 
 ### 신규 릴리즈 배포
 
+GitHub Actions가 main 브랜치 푸시 시 자동으로 배포합니다.
+
+수동 배포가 필요한 경우:
+
 ```bash
-cd /home/eias/claude-workspace/dorothy-claude-service
-
-# 릴리즈 디렉토리 생성
-RELEASE_DIR=/home/eias/dorothy-claude-service/releases/$(date +%Y%m%d_%H%M%S)
-mkdir -p "$RELEASE_DIR"
-
-# 코드 복사
-rsync -av --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' --exclude='.git' \
-  ./ "$RELEASE_DIR/"
-
-# venv 생성 및 의존성 설치
-cd "$RELEASE_DIR"
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# .env 심볼릭 링크
-ln -sf ../shared/.env .env
-
-# current 심볼릭 링크 업데이트
-cd /home/eias/dorothy-claude-service
-rm -f current
-ln -s "$RELEASE_DIR" current
-
-# 서비스 재시작
-sudo systemctl restart dorothy-claude-service
+# 배포 스크립트 실행 (환경에 맞게 SERVICE_DIR 설정 필요)
+./scripts/deploy.sh
 ```
 
 ### 롤백
 
 ```bash
 # 이전 릴리즈로 current 변경
-cd /home/eias/dorothy-claude-service
+cd $SERVICE_DIR
 ls releases/  # 이전 릴리즈 확인
 rm -f current
 ln -s releases/YYYYMMDD_HHMMSS current  # 원하는 릴리즈 선택
@@ -115,7 +95,7 @@ sudo systemctl restart dorothy-claude-service
 
 Dorothy Bot에서 원격 모드로 연결하려면:
 
-1. `/home/eias/dorothy_bot/shared/.env`에 추가:
+1. Dorothy Bot의 `.env`에 추가:
    ```
    CLAUDE_SERVICE_URL=http://127.0.0.1:8090
    CLAUDE_SERVICE_TOKEN=<토큰>
@@ -139,8 +119,8 @@ Dorothy Bot에서 로컬 모드로 롤백하려면:
 sudo journalctl -u dorothy-claude-service -n 50 --no-pager
 
 # 수동 실행으로 에러 확인
-cd /home/eias/dorothy-claude-service/current
-source .venv/bin/activate
+cd $SERVICE_DIR/current
+source $SERVICE_DIR/shared/.venv/bin/activate
 uvicorn src.main:app --host 127.0.0.1 --port 8090 --loop uvloop
 ```
 

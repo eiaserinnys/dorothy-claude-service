@@ -78,8 +78,8 @@ docker compose logs -f
 # 1. 서비스 디렉토리 생성 및 systemd 설치
 ./scripts/install-service.sh
 
-# 2. 환경변수 설정
-vi /home/eias/dorothy-claude-service/shared/.env
+# 2. 환경변수 설정 (설치 스크립트가 안내하는 경로에서)
+vi $SERVICE_DIR/shared/.env
 
 # 3. 배포
 ./scripts/deploy.sh
@@ -106,13 +106,14 @@ sudo systemctl enable --now dorothy-claude-service-health.timer
 ### 배포 구조
 
 ```
-/home/eias/dorothy-claude-service/
-├── current -> releases/2026-01-21-120000/  # 현재 배포
+$SERVICE_DIR/                                  # 예: /opt/dorothy-claude-service
+├── current -> releases/2026-01-21-120000/    # 현재 배포
 ├── releases/
-│   ├── 2026-01-21-120000/                   # 릴리즈 (최근 3개 유지)
+│   ├── 2026-01-21-120000/                    # 릴리즈 (최근 3개 유지)
 │   └── ...
 └── shared/
-    └── .env                                  # 환경변수 (공유)
+    ├── .env                                  # 환경변수 (공유)
+    └── .venv/                                # 가상환경 (공유, GitHub Actions용)
 ```
 
 ## API 사용 예시

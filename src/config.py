@@ -30,7 +30,7 @@ class Settings:
 
     # Claude Code 설정
     anthropic_api_key: str = ""
-    workspace_dir: str = "/home/eias/claude-workspace"
+    workspace_dir: str = "/workspace"
 
     # 리소스 제한
     max_concurrent_sessions: int = 3

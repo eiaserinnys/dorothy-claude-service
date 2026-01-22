@@ -1,17 +1,17 @@
 [Unit]
 Description=Dorothy Claude Code Service
-Documentation=https://github.com/your-repo/dorothy-claude-service
+Documentation=https://github.com/eiaserinnys/dorothy-claude-service
 After=network.target
 
 [Service]
 KillMode=process
 Type=simple
-User=eias
-Group=eias
-WorkingDirectory=/home/eias/dorothy-claude-service/current
-ExecStart=/home/eias/dorothy-claude-service/current/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8090 --loop uvloop
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__SERVICE_DIR__/current
+ExecStart=__SERVICE_DIR__/shared/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8090 --loop uvloop
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/home/eias/dorothy-claude-service/shared/.env
+EnvironmentFile=__SERVICE_DIR__/shared/.env
 
 # 리소스 제한
 LimitNOFILE=65536
@@ -20,8 +20,8 @@ LimitNPROC=4096
 # 보안 설정
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/home/eias/claude-workspace
-ReadWritePaths=/home/eias/dorothy-claude-service
+ReadWritePaths=__WORKSPACE_DIR__
+ReadWritePaths=__SERVICE_DIR__
 
 # 재시작 정책
 Restart=on-failure

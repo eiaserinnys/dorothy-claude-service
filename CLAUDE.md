@@ -122,12 +122,8 @@ sudo systemctl status dorothy-claude-service
 
 ### 프로덕션 경로
 
-```
-/home/eias/dorothy-claude-service/
-├── current -> releases/xxx/
-├── releases/
-└── shared/.env
-```
+프로덕션 경로는 환경변수나 설치 스크립트에서 설정합니다.
+자세한 내용은 `OPERATIONS.md` 참조.
 
 ## 관련 프로젝트
 
