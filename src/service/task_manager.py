@@ -581,3 +581,9 @@ def init_task_manager(storage_path: Optional[Path] = None) -> TaskManager:
     global task_manager
     task_manager = TaskManager(storage_path=storage_path)
     return task_manager
+
+
+def set_task_manager(manager: Optional[TaskManager]) -> None:
+    """TaskManager 인스턴스 설정 (테스트용)"""
+    global task_manager
+    task_manager = manager
