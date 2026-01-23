@@ -43,6 +43,9 @@ class Settings:
     # 헬스 체크
     health_check_interval: int = 30
 
+    # Discord 웹훅 (로그 알림용)
+    discord_webhook_url: str = ""
+
     @classmethod
     def from_env(cls) -> "Settings":
         """환경변수에서 설정 로드"""
@@ -60,6 +63,7 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", cls.log_level),
             log_format=os.getenv("LOG_FORMAT", cls.log_format),
             health_check_interval=int(os.getenv("HEALTH_CHECK_INTERVAL", cls.health_check_interval)),
+            discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
         )
 
     @property

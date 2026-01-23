@@ -17,6 +17,7 @@ from src.api import attachments_router
 from src.api.tasks import router as tasks_router
 from src.service import resource_manager, file_manager
 from src.service.task_manager import init_task_manager, get_task_manager
+from src.service.discord_notifier import discord_notifier
 from src.models import HealthResponse
 from src.config import get_settings, setup_logging
 
@@ -70,10 +71,21 @@ async def lifespan(app: FastAPI):
     _cleanup_task = asyncio.create_task(periodic_cleanup())
     logger.info("  Started periodic cleanup task")
 
+    # Discord 알림 발송 (비동기, 실패해도 서비스에 영향 없음)
+    await discord_notifier.notify_startup(
+        version=settings.version,
+        environment=settings.environment,
+        loaded_tasks=loaded,
+    )
+
     yield
 
     # Shutdown
     logger.info("👋 Claude Code Service shutting down...")
+
+    # Discord 종료 알림 발송
+    uptime = int(time.time() - _start_time)
+    await discord_notifier.notify_shutdown(uptime_seconds=uptime)
 
     # 주기적 정리 태스크 중지
     if _cleanup_task:

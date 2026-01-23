@@ -15,6 +15,8 @@ from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
+from src.service.discord_notifier import discord_notifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -321,7 +323,15 @@ class TaskManager:
             task.claude_session_id = claude_session_id
             task.completed_at = utc_now()
 
+            # 소요 시간 계산
+            duration_seconds = (task.completed_at - task.created_at).total_seconds()
+
             logger.info(f"Completed task: {key}")
+
+        # Discord 알림 (fire-and-forget)
+        asyncio.create_task(discord_notifier.notify_task_completed(
+            client_id, request_id, duration_seconds
+        ))
 
         await self._schedule_save()
         return task
@@ -356,6 +366,9 @@ class TaskManager:
             task.completed_at = utc_now()
 
             logger.info(f"Error task: {key} - {error}")
+
+        # Discord 알림 (fire-and-forget)
+        asyncio.create_task(discord_notifier.notify_task_error(client_id, request_id, error))
 
         await self._schedule_save()
         return task
@@ -559,6 +572,10 @@ class TaskManager:
             )
         )
         logger.info(f"Started background execution for task: {key}")
+
+        # Discord 알림 (fire-and-forget)
+        asyncio.create_task(discord_notifier.notify_task_started(client_id, request_id))
+
         return True
 
     async def _run_execution(
@@ -672,6 +689,14 @@ class TaskManager:
         try:
             await queue.put(reconnect_event)
             logger.debug(f"Sent reconnect status to listener for task {key}")
+
+            # Discord 알림 (fire-and-forget)
+            asyncio.create_task(discord_notifier.notify_reconnect(
+                client_id, request_id,
+                task_status=task.status.value,
+                has_execution=task.execution_task is not None
+            ))
+
         except Exception as e:
             logger.warning(f"Failed to send reconnect status: {e}")
 
