@@ -65,9 +65,9 @@ async def execute_task(
     """
     Claude Code 실행 (SSE 스트리밍)
 
-    태스크를 생성하고 Claude Code를 실행합니다.
+    태스크를 생성하고 Claude Code를 백그라운드에서 실행합니다.
     결과는 SSE로 스트리밍되며, 클라이언트 연결이 끊어져도
-    결과는 보관되어 나중에 조회할 수 있습니다.
+    백그라운드 실행은 계속되고 결과는 보관되어 나중에 조회할 수 있습니다.
     """
     task_manager = get_task_manager()
 
@@ -104,86 +104,35 @@ async def execute_task(
             },
         )
 
+    # 백그라운드에서 Claude 실행 시작
+    await task_manager.start_execution(
+        client_id=request.client_id,
+        request_id=request.request_id,
+        claude_runner=claude_runner,
+        resource_manager=resource_manager,
+    )
+
     async def event_generator():
-        """SSE 이벤트 생성기"""
+        """SSE 이벤트 생성기 (리스너로서 이벤트 수신)"""
         event_queue = asyncio.Queue()
         await task_manager.add_listener(request.client_id, request.request_id, event_queue)
 
         try:
-            async with resource_manager.acquire(timeout=5.0):
-                # 개입 메시지 가져오기 함수
-                async def get_intervention():
-                    return await task_manager.get_intervention(
-                        request.client_id, request.request_id
-                    )
-
-                # 개입 메시지 전송 콜백
-                async def on_intervention_sent(user: str, text: str):
-                    event = {"type": "intervention_sent", "user": user, "text": text}
-                    await task_manager.broadcast(
-                        request.client_id, request.request_id, event
-                    )
-
-                # 진행 상황 브로드캐스트 함수
-                async def broadcast_event(event_dict):
-                    await task_manager.broadcast(
-                        request.client_id, request.request_id, event_dict
-                    )
-
-                # Claude Code 실행
-                async for event in claude_runner.execute(
-                    prompt=request.prompt,
-                    resume_session_id=request.resume_session_id,
-                    get_intervention=get_intervention,
-                    on_intervention_sent=on_intervention_sent,
-                ):
-                    event_dict = event.model_dump()
-
-                    # 리스너들에게 브로드캐스트
-                    await broadcast_event(event_dict)
-
-                    # 완료 또는 오류 시 태스크 상태 업데이트
-                    if event.type == "complete":
-                        await task_manager.complete_task(
-                            request.client_id,
-                            request.request_id,
-                            result=event.result,
-                            claude_session_id=event.claude_session_id,
-                        )
-                    elif event.type == "error":
-                        await task_manager.error_task(
-                            request.client_id,
-                            request.request_id,
-                            error=event.message,
-                        )
-
-                    # 클라이언트에게 전송
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=30.0)
                     yield {
-                        "event": event.type,
-                        "data": json.dumps(event_dict, ensure_ascii=False),
+                        "event": event.get("type", "unknown"),
+                        "data": json.dumps(event, ensure_ascii=False),
                     }
 
-        except RuntimeError as e:
-            # 리소스 획득 실패
-            error_msg = str(e)
-            await task_manager.error_task(
-                request.client_id, request.request_id, error=error_msg
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({"type": "error", "message": error_msg}, ensure_ascii=False),
-            }
+                    # 완료 또는 에러면 종료
+                    if event.get("type") in ["complete", "error"]:
+                        break
 
-        except Exception as e:
-            logger.exception(f"Task execution error: {e}")
-            error_msg = f"실행 오류: {str(e)}"
-            await task_manager.error_task(
-                request.client_id, request.request_id, error=error_msg
-            )
-            yield {
-                "event": "error",
-                "data": json.dumps({"type": "error", "message": error_msg}, ensure_ascii=False),
-            }
+                except asyncio.TimeoutError:
+                    # keepalive (빈 코멘트)
+                    yield {"comment": "keepalive"}
 
         finally:
             await task_manager.remove_listener(
@@ -257,7 +206,7 @@ async def reconnect_stream(
     """
     태스크 SSE 스트림에 재연결
 
-    running 태스크: 진행 중인 이벤트를 계속 수신
+    running 태스크: 현재 상태 전송 후 진행 중인 이벤트를 계속 수신
     completed 태스크: 저장된 결과를 즉시 반환
     error 태스크: 저장된 에러를 즉시 반환
     """
@@ -305,9 +254,14 @@ async def reconnect_stream(
         await task_manager.add_listener(client_id, request_id, event_queue)
 
         try:
+            # 재연결 시 현재 상태 이벤트 전송
+            await task_manager.send_reconnect_status(client_id, request_id, event_queue)
+
             while True:
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=30.0)
+
+                    # reconnected 이벤트도 클라이언트에 전달
                     yield {
                         "event": event.get("type", "unknown"),
                         "data": json.dumps(event, ensure_ascii=False),

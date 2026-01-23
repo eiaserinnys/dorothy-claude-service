@@ -79,6 +79,8 @@ class Task:
     # 런타임 전용 (영속화 안 됨)
     listeners: List[asyncio.Queue] = field(default_factory=list, repr=False)
     intervention_queue: asyncio.Queue = field(default_factory=asyncio.Queue, repr=False)
+    execution_task: Optional[asyncio.Task] = field(default=None, repr=False)  # 백그라운드 실행 태스크
+    last_progress_text: Optional[str] = field(default=None, repr=False)  # 마지막 진행 상황 (재연결용)
 
     @property
     def key(self) -> str:
@@ -513,6 +515,165 @@ class TaskManager:
             return task.intervention_queue.get_nowait()
         except asyncio.QueueEmpty:
             return None
+
+    # === 백그라운드 실행 관리 ===
+
+    async def start_execution(
+        self,
+        client_id: str,
+        request_id: str,
+        claude_runner,
+        resource_manager,
+    ) -> bool:
+        """
+        태스크의 Claude 실행을 백그라운드에서 시작
+
+        SSE 연결과 독립적으로 실행되어, 클라이언트 재연결 시에도
+        실행이 계속됩니다.
+
+        Args:
+            client_id: 클라이언트 ID
+            request_id: 요청 ID
+            claude_runner: ClaudeCodeRunner 인스턴스
+            resource_manager: ResourceManager 인스턴스
+
+        Returns:
+            bool: 성공 여부
+        """
+        key = f"{client_id}:{request_id}"
+        task = self._tasks.get(key)
+        if not task:
+            logger.warning(f"Task not found for execution: {key}")
+            return False
+
+        if task.execution_task is not None:
+            logger.warning(f"Task already executing: {key}")
+            return False
+
+        # 백그라운드 태스크 생성
+        task.execution_task = asyncio.create_task(
+            self._run_execution(
+                task=task,
+                claude_runner=claude_runner,
+                resource_manager=resource_manager,
+            )
+        )
+        logger.info(f"Started background execution for task: {key}")
+        return True
+
+    async def _run_execution(
+        self,
+        task: Task,
+        claude_runner,
+        resource_manager,
+    ) -> None:
+        """백그라운드에서 Claude 실행 및 이벤트 브로드캐스트"""
+        key = task.key
+
+        try:
+            async with resource_manager.acquire(timeout=5.0):
+                # 개입 메시지 가져오기 함수
+                async def get_intervention():
+                    return await self.get_intervention(task.client_id, task.request_id)
+
+                # 개입 메시지 전송 콜백
+                async def on_intervention_sent(user: str, text: str):
+                    event = {"type": "intervention_sent", "user": user, "text": text}
+                    await self.broadcast(task.client_id, task.request_id, event)
+
+                # Claude Code 실행
+                async for event in claude_runner.execute(
+                    prompt=task.prompt,
+                    resume_session_id=task.resume_session_id,
+                    get_intervention=get_intervention,
+                    on_intervention_sent=on_intervention_sent,
+                ):
+                    event_dict = event.model_dump()
+
+                    # 진행 상황 저장 (재연결용)
+                    if event.type == "progress":
+                        task.last_progress_text = event_dict.get("text", "")
+
+                    # 리스너들에게 브로드캐스트
+                    await self.broadcast(task.client_id, task.request_id, event_dict)
+
+                    # 완료 또는 오류 시 태스크 상태 업데이트
+                    if event.type == "complete":
+                        await self.complete_task(
+                            task.client_id,
+                            task.request_id,
+                            result=event.result,
+                            claude_session_id=event.claude_session_id,
+                        )
+                    elif event.type == "error":
+                        await self.error_task(
+                            task.client_id,
+                            task.request_id,
+                            error=event.message,
+                        )
+
+        except RuntimeError as e:
+            # 리소스 획득 실패
+            error_msg = str(e)
+            logger.error(f"Resource acquisition failed for task {key}: {error_msg}")
+            await self.error_task(task.client_id, task.request_id, error=error_msg)
+            # 에러 이벤트 브로드캐스트
+            await self.broadcast(
+                task.client_id, task.request_id,
+                {"type": "error", "message": error_msg}
+            )
+
+        except asyncio.CancelledError:
+            logger.info(f"Task execution cancelled: {key}")
+            raise
+
+        except Exception as e:
+            logger.exception(f"Task execution error for {key}: {e}")
+            error_msg = f"실행 오류: {str(e)}"
+            await self.error_task(task.client_id, task.request_id, error=error_msg)
+            # 에러 이벤트 브로드캐스트
+            await self.broadcast(
+                task.client_id, task.request_id,
+                {"type": "error", "message": error_msg}
+            )
+
+        finally:
+            task.execution_task = None
+            logger.info(f"Background execution finished for task: {key}")
+
+    def is_execution_running(self, client_id: str, request_id: str) -> bool:
+        """태스크 실행이 진행 중인지 확인"""
+        key = f"{client_id}:{request_id}"
+        task = self._tasks.get(key)
+        return task is not None and task.execution_task is not None
+
+    async def send_reconnect_status(self, client_id: str, request_id: str, queue: asyncio.Queue) -> None:
+        """
+        재연결 시 현재 상태 이벤트 전송
+
+        새로 연결된 리스너에게 현재 태스크 상태를 알려줍니다.
+        """
+        key = f"{client_id}:{request_id}"
+        task = self._tasks.get(key)
+        if not task:
+            return
+
+        # 재연결 알림 이벤트
+        reconnect_event = {
+            "type": "reconnected",
+            "status": task.status.value,
+            "has_execution": task.execution_task is not None,
+        }
+
+        # 마지막 진행 상황이 있으면 포함
+        if task.last_progress_text:
+            reconnect_event["last_progress"] = task.last_progress_text
+
+        try:
+            await queue.put(reconnect_event)
+            logger.debug(f"Sent reconnect status to listener for task {key}")
+        except Exception as e:
+            logger.warning(f"Failed to send reconnect status: {e}")
 
     # === 정리 ===
 
