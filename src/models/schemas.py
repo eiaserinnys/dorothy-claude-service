@@ -10,15 +10,6 @@ from pydantic import BaseModel, Field
 
 # === Enums ===
 
-class SessionStatus(str, Enum):
-    """세션 상태"""
-    READY = "ready"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    ERROR = "error"
-    TERMINATED = "terminated"
-
-
 class SSEEventType(str, Enum):
     """SSE 이벤트 타입"""
     PROGRESS = "progress"
@@ -30,52 +21,14 @@ class SSEEventType(str, Enum):
 
 # === Request Models ===
 
-class CreateSessionRequest(BaseModel):
-    """세션 생성 요청"""
-    thread_id: int = Field(..., description="Discord 스레드 ID")
-    user: str = Field(..., description="요청한 사용자")
-    resume_session_id: Optional[str] = Field(None, description="이전 세션 ID (대화 연속성용)")
-
-
-class QueryRequest(BaseModel):
-    """쿼리 실행 요청"""
-    prompt: str = Field(..., description="사용자 프롬프트")
-    attachment_paths: Optional[List[str]] = Field(None, description="첨부 파일 경로 목록")
-
-
 class InterveneRequest(BaseModel):
-    """개입 메시지 요청"""
+    """개입 메시지 요청 (Task API 호환)"""
     text: str = Field(..., description="메시지 텍스트")
     user: str = Field(..., description="요청한 사용자")
     attachment_paths: Optional[List[str]] = Field(None, description="첨부 파일 경로 목록")
 
 
 # === Response Models ===
-
-class SessionResponse(BaseModel):
-    """세션 정보 응답"""
-    session_id: str
-    thread_id: int
-    status: SessionStatus
-    user: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
-
-class SessionCreateResponse(BaseModel):
-    """세션 생성 응답"""
-    session_id: str
-    thread_id: int
-    status: SessionStatus
-    created_at: datetime
-
-
-class SessionDeleteResponse(BaseModel):
-    """세션 삭제 응답"""
-    session_id: str
-    status: SessionStatus
-    partial_result: Optional[str] = None
-
 
 class InterveneResponse(BaseModel):
     """개입 메시지 응답"""
@@ -97,24 +50,12 @@ class AttachmentCleanupResponse(BaseModel):
     files_removed: int
 
 
-class TitleResponse(BaseModel):
-    """세션 제목 응답"""
-    title: str
-
-
 class HealthResponse(BaseModel):
     """헬스 체크 응답"""
     status: str
     version: str
     uptime_seconds: int
     environment: Optional[str] = None
-
-
-class StatusResponse(BaseModel):
-    """서비스 상태 응답"""
-    active_sessions: int
-    max_concurrent: int
-    sessions: List[SessionResponse]
 
 
 # === Error Response ===
@@ -168,7 +109,7 @@ class ErrorEvent(BaseModel):
     message: str
 
 
-# === Task API Models (v2) ===
+# === Task API Models ===
 
 class TaskStatus(str, Enum):
     """태스크 상태"""
@@ -178,7 +119,7 @@ class TaskStatus(str, Enum):
 
 
 class ExecuteRequest(BaseModel):
-    """실행 요청 (새 API)"""
+    """실행 요청"""
     client_id: str = Field(..., description="클라이언트 ID (e.g., 'dorothy_bot')")
     request_id: str = Field(..., description="요청 ID (e.g., Discord thread ID)")
     prompt: str = Field(..., description="실행할 프롬프트")
@@ -205,7 +146,7 @@ class TaskListResponse(BaseModel):
 
 
 class TaskInterveneRequest(BaseModel):
-    """개입 메시지 요청 (새 API)"""
+    """개입 메시지 요청"""
     text: str = Field(..., description="메시지 텍스트")
     user: str = Field(..., description="요청한 사용자")
     attachment_paths: Optional[List[str]] = Field(None, description="첨부 파일 경로 목록")

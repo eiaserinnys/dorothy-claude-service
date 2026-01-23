@@ -23,7 +23,7 @@ def test_status_endpoint(client):
     assert response.status_code == 200
 
     data = response.json()
-    assert "active_sessions" in data
+    assert "active_tasks" in data
     assert "max_concurrent" in data
-    assert "sessions" in data
-    assert isinstance(data["sessions"], list)
+    assert "tasks" in data
+    assert isinstance(data["tasks"], list)

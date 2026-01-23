@@ -13,11 +13,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api import sessions_router, attachments_router
+from src.api import attachments_router
 from src.api.tasks import router as tasks_router
-from src.service import session_manager, resource_manager, file_manager
+from src.service import resource_manager, file_manager
 from src.service.task_manager import init_task_manager, get_task_manager
-from src.models import SessionResponse, StatusResponse, HealthResponse
+from src.models import HealthResponse
 from src.config import get_settings, setup_logging
 
 # 설정 로드
@@ -83,11 +83,6 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # 활성 세션 종료 (기존 세션 기반 - 향후 제거 예정)
-    terminated = await session_manager.terminate_all()
-    if terminated > 0:
-        logger.info(f"  Terminated {terminated} active sessions")
-
     # TaskManager 저장
     try:
         task_manager = get_task_manager()
@@ -138,35 +133,33 @@ async def health_check():
     )
 
 
-@app.get("/status", response_model=StatusResponse, tags=["health"])
+@app.get("/status", tags=["health"])
 async def get_status():
     """서비스 상태 조회"""
-    active_sessions = session_manager.get_active_sessions()
+    task_manager = get_task_manager()
+    running_tasks = [t for t in task_manager._tasks.values() if t.status == "running"]
 
-    return StatusResponse(
-        active_sessions=len(active_sessions),
-        max_concurrent=resource_manager.max_concurrent,
-        sessions=[
-            SessionResponse(
-                session_id=s.session_id,
-                thread_id=s.thread_id,
-                status=s.status,
-                user=s.user,
-                created_at=s.created_at,
-                updated_at=s.updated_at,
-            )
-            for s in active_sessions
+    return {
+        "active_tasks": len(running_tasks),
+        "max_concurrent": resource_manager.max_concurrent,
+        "tasks": [
+            {
+                "client_id": t.client_id,
+                "request_id": t.request_id,
+                "status": t.status,
+                "created_at": t.created_at.isoformat(),
+            }
+            for t in running_tasks
         ],
-    )
+    }
 
 
 # === API Routers ===
 
-# Task API (v2) - 새 태스크 기반 API
+# Task API - 태스크 기반 API
 app.include_router(tasks_router, tags=["tasks"])
 
-# Legacy API - 기존 세션 기반 API (향후 제거 예정)
-app.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
+# Attachments API
 app.include_router(attachments_router, prefix="/attachments", tags=["attachments"])
 
 

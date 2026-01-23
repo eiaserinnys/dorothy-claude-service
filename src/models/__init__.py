@@ -1,19 +1,11 @@
 # Pydantic Models
 from .schemas import (
-    SessionStatus,
     SSEEventType,
-    CreateSessionRequest,
-    QueryRequest,
     InterveneRequest,
-    SessionResponse,
-    SessionCreateResponse,
-    SessionDeleteResponse,
     InterveneResponse,
     AttachmentUploadResponse,
     AttachmentCleanupResponse,
-    TitleResponse,
     HealthResponse,
-    StatusResponse,
     ErrorDetail,
     ErrorResponse,
     ProgressEvent,
@@ -21,7 +13,7 @@ from .schemas import (
     InterventionSentEvent,
     CompleteEvent,
     ErrorEvent,
-    # Task API (v2)
+    # Task API
     TaskStatus,
     ExecuteRequest,
     TaskResponse,
@@ -30,20 +22,12 @@ from .schemas import (
 )
 
 __all__ = [
-    "SessionStatus",
     "SSEEventType",
-    "CreateSessionRequest",
-    "QueryRequest",
     "InterveneRequest",
-    "SessionResponse",
-    "SessionCreateResponse",
-    "SessionDeleteResponse",
     "InterveneResponse",
     "AttachmentUploadResponse",
     "AttachmentCleanupResponse",
-    "TitleResponse",
     "HealthResponse",
-    "StatusResponse",
     "ErrorDetail",
     "ErrorResponse",
     "ProgressEvent",
@@ -51,7 +35,7 @@ __all__ = [
     "InterventionSentEvent",
     "CompleteEvent",
     "ErrorEvent",
-    # Task API (v2)
+    # Task API
     "TaskStatus",
     "ExecuteRequest",
     "TaskResponse",
