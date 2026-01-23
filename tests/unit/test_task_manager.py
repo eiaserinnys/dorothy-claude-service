@@ -399,6 +399,125 @@ class TestTaskManagerCleanup:
         assert await task_manager.get_task("client", "req1") is not None
 
 
+class TestTaskManagerAdditional:
+    """추가 메서드 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_mark_delivered(self, task_manager):
+        """결과 전달 완료 마킹"""
+        await task_manager.create_task("client", "req1", "prompt")
+        await task_manager.complete_task("client", "req1", "결과", "sess")
+
+        result = await task_manager.mark_delivered("client", "req1")
+
+        assert result is True
+        task = await task_manager.get_task("client", "req1")
+        assert task.result_delivered is True
+
+    @pytest.mark.asyncio
+    async def test_mark_delivered_not_found(self, task_manager):
+        """없는 태스크에 mark_delivered"""
+        result = await task_manager.mark_delivered("client", "nonexistent")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_get_stats(self, task_manager):
+        """통계 조회"""
+        # 여러 상태의 태스크 생성
+        await task_manager.create_task("client", "req1", "p1")  # running
+        await task_manager.create_task("client", "req2", "p2")  # running
+
+        task3 = await task_manager.create_task("client", "req3", "p3")
+        await task_manager.complete_task("client", "req3", "결과", "sess")  # completed
+
+        task4 = await task_manager.create_task("client", "req4", "p4")
+        await task_manager.error_task("client", "req4", "에러")  # error
+
+        stats = task_manager.get_stats()
+
+        assert stats["total"] == 4
+        assert stats["running"] == 2
+        assert stats["completed"] == 1
+        assert stats["error"] == 1
+
+    @pytest.mark.asyncio
+    async def test_send_reconnect_status_running(self, task_manager):
+        """재연결 시 running 태스크 상태 전송"""
+        task = await task_manager.create_task("client", "req1", "prompt")
+        task.last_progress_text = "진행 중..."
+
+        queue = asyncio.Queue()
+        await task_manager.add_listener("client", "req1", queue)
+
+        await task_manager.send_reconnect_status("client", "req1", queue)
+
+        event = await queue.get()
+        assert event["type"] == "reconnected"
+        assert event["status"] == "running"
+        assert event["last_progress"] == "진행 중..."
+
+    @pytest.mark.asyncio
+    async def test_send_reconnect_status_no_task(self, task_manager):
+        """없는 태스크에 재연결 상태 전송 (무시)"""
+        queue = asyncio.Queue()
+
+        # 에러 없이 완료되어야 함
+        await task_manager.send_reconnect_status("client", "nonexistent", queue)
+
+        assert queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_is_execution_running(self, task_manager):
+        """실행 중 여부 확인"""
+        task = await task_manager.create_task("client", "req1", "prompt")
+
+        # execution_task 없음
+        assert task_manager.is_execution_running("client", "req1") is False
+
+        # execution_task 설정
+        async def dummy_execution():
+            await asyncio.sleep(100)
+
+        task.execution_task = asyncio.create_task(dummy_execution())
+
+        assert task_manager.is_execution_running("client", "req1") is True
+
+        # 정리
+        task.execution_task.cancel()
+        try:
+            await task.execution_task
+        except asyncio.CancelledError:
+            pass
+
+    @pytest.mark.asyncio
+    async def test_add_intervention_with_attachments(self, task_manager):
+        """첨부 파일이 있는 개입 메시지"""
+        task = await task_manager.create_task("client", "req1", "prompt")
+
+        position = await task_manager.add_intervention(
+            "client",
+            "req1",
+            text="파일 확인해줘",
+            user="user#1234",
+            attachment_paths=["/path/to/file1.txt", "/path/to/file2.png"],
+        )
+
+        assert position == 1
+
+        msg = await task_manager.get_intervention("client", "req1")
+        assert msg["text"] == "파일 확인해줘"
+        assert msg["attachment_paths"] == ["/path/to/file1.txt", "/path/to/file2.png"]
+
+    @pytest.mark.asyncio
+    async def test_add_intervention_task_not_found(self, task_manager):
+        """없는 태스크에 개입 시도"""
+        from src.service.task_manager import TaskNotFoundError
+
+        with pytest.raises(TaskNotFoundError):
+            await task_manager.add_intervention("client", "nonexistent", "msg", "user")
+
+
 # === Fixtures ===
 
 from src.service.task_manager import TaskManager, TaskConflictError, TaskNotRunningError
