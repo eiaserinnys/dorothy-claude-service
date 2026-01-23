@@ -702,6 +702,47 @@ class TaskManager:
 
     # === 정리 ===
 
+    async def cancel_running_tasks(self, timeout: float = 5.0) -> int:
+        """
+        실행 중인 모든 태스크 취소
+
+        서비스 shutdown 시 호출하여 고아 프로세스 방지.
+
+        Args:
+            timeout: 취소 대기 시간 (초)
+
+        Returns:
+            취소된 태스크 수
+        """
+        tasks_to_cancel = []
+
+        async with self._lock:
+            for key, task in self._tasks.items():
+                if task.execution_task and not task.execution_task.done():
+                    task.execution_task.cancel()
+                    tasks_to_cancel.append((key, task.execution_task))
+                    logger.info(f"Cancelling execution for task: {key}")
+
+        if not tasks_to_cancel:
+            return 0
+
+        # 모든 취소된 태스크 완료 대기 (gather로 병렬 대기)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *[t for _, t in tasks_to_cancel],
+                    return_exceptions=True
+                ),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Task cancellation timeout after {timeout}s")
+
+        # 취소된 태스크 수 카운트
+        cancelled_count = sum(1 for _, t in tasks_to_cancel if t.done())
+        logger.info(f"Cancelled {cancelled_count}/{len(tasks_to_cancel)} running tasks")
+        return cancelled_count
+
     async def cleanup_old_tasks(self, max_age_hours: int = 24) -> int:
         """
         오래된 태스크 정리

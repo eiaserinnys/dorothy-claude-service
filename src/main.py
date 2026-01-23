@@ -95,9 +95,12 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    # TaskManager 저장
+    # 실행 중인 태스크 취소 (고아 프로세스 방지)
     try:
         task_manager = get_task_manager()
+        cancelled = await task_manager.cancel_running_tasks(timeout=5.0)
+        if cancelled > 0:
+            logger.info(f"  Cancelled {cancelled} running tasks")
         await task_manager._save()
         logger.info("  Saved tasks to storage")
     except RuntimeError:
