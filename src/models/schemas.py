@@ -107,6 +107,7 @@ class ErrorEvent(BaseModel):
     """오류 이벤트"""
     type: str = "error"
     message: str
+    error_code: Optional[str] = Field(None, description="에러 코드 (예: SESSION_NOT_FOUND)")
 
 
 # === Task API Models ===
