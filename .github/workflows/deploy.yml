@@ -89,24 +89,25 @@ jobs:
           RELEASE_NAME: ${{ steps.release.outputs.name }}
         run: |
           RELEASES_DIR="${DEPLOY_DIR}/releases"
+          SHARED_DIR="${DEPLOY_DIR}/shared"
           RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
           SSH_CMD="ssh -i ~/.ssh/id_ed25519 ${{ secrets.LINODE_USER }}@${{ secrets.LINODE_HOST }}"
 
           echo "=== 4. 심볼릭 링크 전환 (원자적) ==="
           $SSH_CMD "ln -sfn ${RELEASE_DIR} ${DEPLOY_DIR}/current"
 
-          echo "=== 5. 서비스 재시작 ==="
-          $SSH_CMD "sudo systemctl restart dorothy-claude-service.service"
+          echo "=== 5. 지연 재시작 플래그 생성 ==="
+          # Claude Code 세션이 종료된 후 watchdog이 재시작 처리
+          RESTART_FLAG='{
+            "service": "dorothy-claude-service",
+            "release": "${RELEASE_NAME}",
+            "commit": "${GITHUB_SHA}",
+            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+          }'
+          $SSH_CMD "echo '${RESTART_FLAG}' > ${SHARED_DIR}/.restart_pending"
+          echo "Restart pending flag created - watchdog will handle restart after Claude session ends"
 
-          sleep 3
-
-          echo "=== 6. 서비스 상태 확인 ==="
-          $SSH_CMD "sudo systemctl status dorothy-claude-service.service --no-pager" || true
-
-          echo "=== 7. 헬스 체크 ==="
-          $SSH_CMD "curl -s http://127.0.0.1:8090/health | python3 -m json.tool" || true
-
-          echo "=== 8. 정상 릴리즈 기록 ==="
+          echo "=== 6. 정상 릴리즈 기록 ==="
           $SSH_CMD "echo '${RELEASE_NAME}' > ${DEPLOY_DIR}/.last_good_release"
 
       - name: Cleanup old releases
@@ -139,7 +140,7 @@ jobs:
         if: success()
         run: |
           curl -s -H "Content-Type: application/json" \
-            -d "{\"embeds\": [{\"title\": \"✅ 배포 완료 | dorothy-claude-service\", \"color\": 5763719, \"fields\": [{\"name\": \"브랜치\", \"value\": \"\`${{ github.ref_name }}\`\", \"inline\": true}, {\"name\": \"커밋\", \"value\": \"[\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": true}]}]}" \
+            -d "{\"embeds\": [{\"title\": \"📦 배포 완료 | dorothy-claude-service\", \"description\": \"⏳ Claude 세션 종료 후 자동 재시작 예정\", \"color\": 3447003, \"fields\": [{\"name\": \"브랜치\", \"value\": \"\`${{ github.ref_name }}\`\", \"inline\": true}, {\"name\": \"커밋\", \"value\": \"[\`${GITHUB_SHA::7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": true}]}]}" \
             ${{ secrets.DISCORD_WEBHOOK_URL }} || true
 
       - name: Discord 알림 (배포 실패)
