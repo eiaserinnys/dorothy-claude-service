@@ -218,11 +218,12 @@ class ClaudeCodeRunner:
         if not SDK_AVAILABLE:
             raise RuntimeError("Claude Agent SDK not available")
 
-        # 환경변수 설정 (민감 정보 제외)
+        # 환경변수 설정 (민감 정보 및 서비스 전용 설정 제외)
         env = os.environ.copy()
         keys_to_remove = [
             'OPENAI_API_KEY', 'DISCORD_BOT_TOKEN', 'GH_TOKEN',
-            'ROAM_PASSWORD', 'GOOGLE_API_KEY', 'CLAUDE_SERVICE_TOKEN'
+            'ROAM_PASSWORD', 'GOOGLE_API_KEY', 'CLAUDE_SERVICE_TOKEN',
+            'DISCORD_WEBHOOK_URL',  # 개발 환경에서 프로덕션 웹훅 알림 방지
         ]
         for key in keys_to_remove:
             env.pop(key, None)
