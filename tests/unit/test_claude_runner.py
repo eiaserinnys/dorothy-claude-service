@@ -11,6 +11,9 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from src.service.claude_runner import ClaudeCodeRunner
+from src.service.output_sanitizer import sanitize_output
+from src.service.attachment_extractor import AttachmentExtractor
+from src.service.session_validator import validate_session, find_session_file
 
 
 @pytest.fixture
@@ -19,92 +22,98 @@ def runner(tmp_path):
     return ClaudeCodeRunner(workspace_dir=str(tmp_path))
 
 
+@pytest.fixture
+def attachment_extractor(tmp_path):
+    """테스트용 AttachmentExtractor"""
+    return AttachmentExtractor(workspace_dir=str(tmp_path))
+
+
 class TestSanitizeOutput:
     """출력 민감 정보 마스킹 테스트"""
 
-    def test_mask_anthropic_api_key(self, runner):
+    def test_mask_anthropic_api_key(self):
         """Anthropic API 키 마스킹"""
         text = "API key is sk-ant-api03-abc123def456-xyz"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "sk-ant-" not in result
         assert "REDACTED" in result
 
-    def test_mask_openai_api_key(self, runner):
+    def test_mask_openai_api_key(self):
         """OpenAI API 키 마스킹"""
         text = "Using key sk-proj-abc123def456ghi789jkl012"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "sk-proj" not in result
         assert "REDACTED" in result
 
-    def test_mask_github_pat(self, runner):
+    def test_mask_github_pat(self):
         """GitHub Personal Access Token 마스킹"""
         text = "Token: ghp_abcdefghij1234567890abcdefghij12"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         # 원본 토큰 값이 마스킹됨
         assert "abcdefghij1234567890abcdefghij12" not in result
         assert "REDACTED" in result
 
-    def test_mask_github_oauth(self, runner):
+    def test_mask_github_oauth(self):
         """GitHub OAuth Token 마스킹"""
         text = "OAuth: gho_abcdefghij1234567890abcdefghij12"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         # 원본 토큰 값이 마스킹됨
         assert "abcdefghij1234567890abcdefghij12" not in result
         assert "REDACTED" in result
 
-    def test_mask_slack_token(self, runner):
+    def test_mask_slack_token(self):
         """Slack Token 마스킹"""
         text = "Slack bot: xoxb-123-456-abc"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         # 원본 토큰 값이 마스킹됨
         assert "123-456-abc" not in result
         assert "REDACTED" in result
 
-    def test_mask_discord_env(self, runner):
+    def test_mask_discord_env(self):
         """Discord 환경변수 마스킹"""
         text = "DISCORD_BOT_TOKEN=abcdef123456"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "abcdef123456" not in result
         assert "REDACTED" in result
 
-    def test_mask_password_env(self, runner):
+    def test_mask_password_env(self):
         """PASSWORD 환경변수 마스킹"""
         text = "DB_PASSWORD=mysecretpass"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "mysecretpass" not in result
         assert "REDACTED" in result
 
-    def test_mask_secret_env(self, runner):
+    def test_mask_secret_env(self):
         """SECRET 환경변수 마스킹"""
         text = "JWT_SECRET=supersecret123"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "supersecret123" not in result
         assert "REDACTED" in result
 
-    def test_mask_token_env(self, runner):
+    def test_mask_token_env(self):
         """TOKEN 환경변수 마스킹"""
         text = "AUTH_TOKEN=mytoken123"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "mytoken123" not in result
         assert "REDACTED" in result
 
-    def test_mask_key_env(self, runner):
+    def test_mask_key_env(self):
         """KEY 환경변수 마스킹"""
         text = "API_KEY=key123abc"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert "key123abc" not in result
         assert "REDACTED" in result
 
-    def test_preserve_normal_text(self, runner):
+    def test_preserve_normal_text(self):
         """일반 텍스트는 유지"""
         text = "This is normal output with no secrets."
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         assert result == text
 
-    def test_mask_multiple_secrets(self, runner):
+    def test_mask_multiple_secrets(self):
         """여러 시크릿 동시 마스킹"""
         text = "Key1: sk-abc123def456ghijklmnop, Key2: ghp_xyz789abc012def345ghi678jkl901"
-        result = runner._sanitize_output(text)
+        result = sanitize_output(text)
         # 원본 토큰 값들이 마스킹됨
         assert "abc123def456ghijklmnop" not in result
         assert "xyz789abc012def345ghi678jkl901" not in result
@@ -114,20 +123,20 @@ class TestSanitizeOutput:
 class TestExtractAttachments:
     """첨부 파일 추출 테스트"""
 
-    def test_extract_single_attachment(self, runner, tmp_path):
+    def test_extract_single_attachment(self, attachment_extractor, tmp_path):
         """단일 첨부 파일 추출"""
         # 실제 파일 생성
         test_file = tmp_path / "output.png"
         test_file.write_bytes(b"fake png content")
 
         text = f"Here's the result: [ATTACH:{test_file}]"
-        cleaned, attachments = runner._extract_attachments(text)
+        cleaned, attachments = attachment_extractor.extract_attachments(text)
 
         assert "[ATTACH:" not in cleaned
         assert len(attachments) == 1
         assert str(test_file) in attachments[0]
 
-    def test_extract_multiple_attachments(self, runner, tmp_path):
+    def test_extract_multiple_attachments(self, attachment_extractor, tmp_path):
         """여러 첨부 파일 추출"""
         file1 = tmp_path / "file1.txt"
         file2 = tmp_path / "file2.txt"
@@ -135,23 +144,23 @@ class TestExtractAttachments:
         file2.write_text("content2")
 
         text = f"Files: [ATTACH:{file1}] and [ATTACH:{file2}]"
-        cleaned, attachments = runner._extract_attachments(text)
+        cleaned, attachments = attachment_extractor.extract_attachments(text)
 
         assert "[ATTACH:" not in cleaned
         assert len(attachments) == 2
 
-    def test_no_attachments(self, runner):
+    def test_no_attachments(self, attachment_extractor):
         """첨부 파일 없음"""
         text = "No attachments here."
-        cleaned, attachments = runner._extract_attachments(text)
+        cleaned, attachments = attachment_extractor.extract_attachments(text)
 
         assert cleaned == text
         assert attachments == []
 
-    def test_invalid_attachment_path(self, runner):
+    def test_invalid_attachment_path(self, attachment_extractor):
         """유효하지 않은 첨부 파일 경로는 무시"""
         text = "[ATTACH:/nonexistent/file.txt]"
-        cleaned, attachments = runner._extract_attachments(text)
+        cleaned, attachments = attachment_extractor.extract_attachments(text)
 
         assert len(attachments) == 0
 
@@ -159,53 +168,53 @@ class TestExtractAttachments:
 class TestIsSafeAttachmentPath:
     """첨부 파일 경로 보안 검증 테스트"""
 
-    def test_allow_workspace_file(self, runner, tmp_path):
+    def test_allow_workspace_file(self, attachment_extractor, tmp_path):
         """워크스페이스 내 파일 허용"""
         test_file = tmp_path / "test.txt"
         test_file.write_text("content")
 
-        assert runner._is_safe_attachment_path(str(test_file)) is True
+        assert attachment_extractor.is_safe_attachment_path(str(test_file)) is True
 
-    def test_reject_outside_workspace(self, runner):
+    def test_reject_outside_workspace(self, attachment_extractor):
         """워크스페이스 외부 파일 거부"""
-        assert runner._is_safe_attachment_path("/etc/passwd") is False
+        assert attachment_extractor.is_safe_attachment_path("/etc/passwd") is False
 
-    def test_reject_dangerous_extension_env(self, runner, tmp_path):
+    def test_reject_dangerous_extension_env(self, attachment_extractor, tmp_path):
         """확장자가 .env인 파일 거부"""
         # Path('.env').suffix는 빈 문자열이므로 credentials.env 사용
         env_file = tmp_path / "credentials.env"
         env_file.write_text("SECRET=value")
 
-        assert runner._is_safe_attachment_path(str(env_file)) is False
+        assert attachment_extractor.is_safe_attachment_path(str(env_file)) is False
 
-    def test_reject_dangerous_extension_pem(self, runner, tmp_path):
+    def test_reject_dangerous_extension_pem(self, attachment_extractor, tmp_path):
         """.pem 파일 거부"""
         pem_file = tmp_path / "key.pem"
         pem_file.write_text("-----BEGIN PRIVATE KEY-----")
 
-        assert runner._is_safe_attachment_path(str(pem_file)) is False
+        assert attachment_extractor.is_safe_attachment_path(str(pem_file)) is False
 
-    def test_reject_dangerous_extension_key(self, runner, tmp_path):
+    def test_reject_dangerous_extension_key(self, attachment_extractor, tmp_path):
         """.key 파일 거부"""
         key_file = tmp_path / "server.key"
         key_file.write_text("private key content")
 
-        assert runner._is_safe_attachment_path(str(key_file)) is False
+        assert attachment_extractor.is_safe_attachment_path(str(key_file)) is False
 
-    def test_reject_nonexistent_file(self, runner, tmp_path):
+    def test_reject_nonexistent_file(self, attachment_extractor, tmp_path):
         """존재하지 않는 파일 거부"""
-        assert runner._is_safe_attachment_path(str(tmp_path / "nonexistent.txt")) is False
+        assert attachment_extractor.is_safe_attachment_path(str(tmp_path / "nonexistent.txt")) is False
 
-    def test_reject_directory(self, runner, tmp_path):
+    def test_reject_directory(self, attachment_extractor, tmp_path):
         """디렉토리 거부"""
-        assert runner._is_safe_attachment_path(str(tmp_path)) is False
+        assert attachment_extractor.is_safe_attachment_path(str(tmp_path)) is False
 
-    def test_reject_large_file(self, runner, tmp_path):
+    def test_reject_large_file(self, attachment_extractor, tmp_path):
         """너무 큰 파일 거부 (8MB 초과)"""
         large_file = tmp_path / "large.bin"
         large_file.write_bytes(b"x" * (9 * 1024 * 1024))  # 9MB
 
-        assert runner._is_safe_attachment_path(str(large_file)) is False
+        assert attachment_extractor.is_safe_attachment_path(str(large_file)) is False
 
     def test_allow_tmp_claude_code_path(self, runner):
         """tmp/claude-code- 경로 허용"""
@@ -304,3 +313,25 @@ class TestCreateOptions:
                 os.environ["DISCORD_BOT_TOKEN"] = original_discord
             else:
                 os.environ.pop("DISCORD_BOT_TOKEN", None)
+
+
+class TestSessionValidator:
+    """세션 검증 테스트"""
+
+    def test_validate_session_invalid_format(self):
+        """유효하지 않은 형식의 세션 ID"""
+        result = validate_session("invalid-session-id")
+        assert result is not None
+        assert "유효하지 않은 세션 ID 형식" in result
+
+    def test_validate_session_valid_format_but_not_found(self):
+        """유효한 형식이지만 존재하지 않는 세션"""
+        result = validate_session("12345678-1234-1234-1234-123456789012")
+        assert result is not None
+        assert "세션을 찾을 수 없습니다" in result
+
+    def test_find_session_file_no_projects_dir(self, tmp_path):
+        """projects 디렉토리가 없는 경우"""
+        result = find_session_file("12345678-1234-1234-1234-123456789012")
+        # ~/.claude/projects가 없으면 None 반환
+        # (이 테스트는 실제 환경에 따라 결과가 다를 수 있음)

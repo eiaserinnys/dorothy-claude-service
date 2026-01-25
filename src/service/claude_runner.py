@@ -5,10 +5,8 @@ Claude Agent SDK를 사용하여 Claude Code를 실행하고 결과를 스트리
 """
 
 import os
-import re
 import asyncio
 import logging
-from pathlib import Path
 from typing import Optional, AsyncIterator, Callable, Awaitable, List
 from dataclasses import dataclass
 
@@ -51,10 +49,13 @@ from src.models import (
     CompactEvent,
 )
 from src.service.resource_manager import resource_manager
+from src.service.output_sanitizer import sanitize_output
+from src.service.attachment_extractor import AttachmentExtractor
+from src.service.session_validator import (
+    validate_session,
+    SESSION_NOT_FOUND_CODE,
+)
 
-
-# 세션 검증 관련 상수
-SESSION_NOT_FOUND_CODE = "SESSION_NOT_FOUND"
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,6 @@ DISALLOWED_TOOLS = ["NotebookEdit", "TodoWrite"]
 EXECUTION_TIMEOUT = 600  # 10분
 STREAM_UPDATE_INTERVAL = 2.0  # 초
 MEMORY_REPORT_INTERVAL = 10.0  # 초
-
-# 공통 상수는 constants 모듈에서 import
-from src.constants import MAX_ATTACHMENT_SIZE, DANGEROUS_EXTENSIONS
 
 # 컨텍스트 관련 상수
 DEFAULT_MAX_CONTEXT_TOKENS = 200000  # 기본 컨텍스트 윈도우 크기
@@ -100,128 +98,8 @@ class ClaudeCodeRunner:
         self._workspace_dir = workspace_dir or os.getenv(
             "WORKSPACE_DIR", "/workspace"
         )
-
-    def _sanitize_output(self, text: str) -> str:
-        """출력에서 민감 정보 마스킹"""
-        patterns = [
-            (r'sk-[a-zA-Z0-9-_]{20,}', 'sk-***REDACTED***'),
-            (r'sk-ant-[a-zA-Z0-9-_]+', 'sk-ant-***REDACTED***'),
-            (r'ghp_[a-zA-Z0-9]{30,}', 'ghp_***REDACTED***'),
-            (r'gho_[a-zA-Z0-9]{30,}', 'gho_***REDACTED***'),
-            (r'github_pat_[a-zA-Z0-9_]{20,}', 'github_pat_***REDACTED***'),
-            (r'xoxb-[a-zA-Z0-9-]+', 'xoxb-***REDACTED***'),
-            (r'xoxp-[a-zA-Z0-9-]+', 'xoxp-***REDACTED***'),
-            (r'DISCORD_[A-Z_]*=\S+', 'DISCORD_***=REDACTED'),
-            (r'[a-zA-Z_]*PASSWORD[a-zA-Z_]*=\S+', '***PASSWORD***=REDACTED'),
-            (r'[a-zA-Z_]*SECRET[a-zA-Z_]*=\S+', '***SECRET***=REDACTED'),
-            (r'[a-zA-Z_]*TOKEN[a-zA-Z_]*=\S+', '***TOKEN***=REDACTED'),
-            (r'[a-zA-Z_]*KEY[a-zA-Z_]*=\S+', '***KEY***=REDACTED'),
-        ]
-
-        result = text
-        for pattern, replacement in patterns:
-            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-
-        return result
-
-    def _extract_attachments(self, text: str) -> tuple[str, list[str]]:
-        """출력에서 [ATTACH:path] 패턴 추출"""
-        pattern = r'\[ATTACH:([^\]]+)\]'
-        attachments = []
-
-        for match in re.finditer(pattern, text):
-            path = match.group(1).strip()
-            if self._is_safe_attachment_path(path):
-                attachments.append(path)
-
-        cleaned = re.sub(pattern, '', text).strip()
-        return cleaned, attachments
-
-    def _is_safe_attachment_path(self, path: str) -> bool:
-        """첨부 파일 경로 보안 검증"""
-        try:
-            resolved = Path(path).resolve()
-            resolved_str = str(resolved)
-
-            # 허용된 디렉토리
-            allowed = False
-            if resolved_str.startswith(self._workspace_dir):
-                allowed = True
-            if resolved_str.startswith('/tmp/claude-code-'):
-                allowed = True
-
-            if not allowed:
-                return False
-
-            if resolved.suffix.lower() in DANGEROUS_EXTENSIONS:
-                return False
-
-            if not resolved.exists():
-                return False
-
-            if resolved.is_dir():
-                return False
-
-            if resolved.stat().st_size > MAX_ATTACHMENT_SIZE:
-                return False
-
-            return True
-
-        except Exception:
-            return False
-
-    def _find_session_file(self, session_id: str) -> Optional[Path]:
-        """
-        세션 파일을 찾습니다.
-
-        세션 파일은 ~/.claude/projects/{project-path}/{session-id}.jsonl 형식으로 저장됩니다.
-        여러 프로젝트 경로에서 검색합니다.
-
-        Args:
-            session_id: 세션 ID (UUID 형식)
-
-        Returns:
-            세션 파일 경로 또는 None
-        """
-        claude_dir = Path.home() / ".claude" / "projects"
-        if not claude_dir.exists():
-            return None
-
-        # 모든 프로젝트 폴더에서 세션 파일 검색
-        session_file_name = f"{session_id}.jsonl"
-        for project_dir in claude_dir.iterdir():
-            if project_dir.is_dir():
-                session_file = project_dir / session_file_name
-                if session_file.exists():
-                    return session_file
-
-        return None
-
-    def _validate_session(self, session_id: str) -> Optional[str]:
-        """
-        세션 ID가 유효한지 검증합니다.
-
-        Args:
-            session_id: 세션 ID
-
-        Returns:
-            에러 메시지 (유효하면 None)
-        """
-        # 기본 형식 검증 (UUID 형식)
-        uuid_pattern = re.compile(
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-            re.IGNORECASE
-        )
-
-        if not uuid_pattern.match(session_id):
-            return f"유효하지 않은 세션 ID 형식입니다: {session_id}"
-
-        # 세션 파일 존재 확인
-        session_file = self._find_session_file(session_id)
-        if session_file is None:
-            return f"세션을 찾을 수 없습니다: {session_id}"
-
-        return None
+        # 첨부 파일 추출기 초기화
+        self._attachment_extractor = AttachmentExtractor(self._workspace_dir)
 
     def _create_options(
         self,
@@ -381,7 +259,7 @@ class ClaudeCodeRunner:
 
         # 세션 ID 검증 (resume 시)
         if resume_session_id:
-            validation_error = self._validate_session(resume_session_id)
+            validation_error = validate_session(resume_session_id)
             if validation_error:
                 yield ErrorEvent(
                     message=validation_error,
@@ -435,7 +313,7 @@ class ClaudeCodeRunner:
                     if current_time - last_update_time >= STREAM_UPDATE_INTERVAL:
                         display_text = current_text or accumulated_text
                         if display_text:
-                            sanitized = self._sanitize_output(display_text)
+                            sanitized = sanitize_output(display_text)
                             yield ProgressEvent(text=sanitized)
                             last_update_time = current_time
                             memory_reported_since_progress = False
@@ -487,8 +365,8 @@ class ClaudeCodeRunner:
                 final_text = "(결과 없음)"
 
             # 출력 필터링 및 첨부 파일 추출
-            final_text = self._sanitize_output(final_text)
-            final_text, attachments = self._extract_attachments(final_text)
+            final_text = sanitize_output(final_text)
+            final_text, attachments = self._attachment_extractor.extract_attachments(final_text)
 
             yield CompleteEvent(
                 result=final_text,
