@@ -110,6 +110,14 @@ class ErrorEvent(BaseModel):
     error_code: Optional[str] = Field(None, description="에러 코드 (예: SESSION_NOT_FOUND)")
 
 
+class ContextUsageEvent(BaseModel):
+    """컨텍스트 사용량 이벤트"""
+    type: str = "context_usage"
+    used_tokens: int = Field(..., description="사용된 토큰 수")
+    max_tokens: int = Field(..., description="최대 토큰 수")
+    percent: float = Field(..., description="사용 퍼센트 (0-100)")
+
+
 # === Task API Models ===
 
 class TaskStatus(str, Enum):

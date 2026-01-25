@@ -13,6 +13,7 @@ from .schemas import (
     InterventionSentEvent,
     CompleteEvent,
     ErrorEvent,
+    ContextUsageEvent,
     # Task API
     TaskStatus,
     ExecuteRequest,
@@ -35,6 +36,7 @@ __all__ = [
     "InterventionSentEvent",
     "CompleteEvent",
     "ErrorEvent",
+    "ContextUsageEvent",
     # Task API
     "TaskStatus",
     "ExecuteRequest",

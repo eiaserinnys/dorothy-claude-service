@@ -38,6 +38,7 @@ from src.models import (
     InterventionSentEvent,
     CompleteEvent,
     ErrorEvent,
+    ContextUsageEvent,
 )
 from src.service.resource_manager import resource_manager
 
@@ -56,6 +57,9 @@ STREAM_UPDATE_INTERVAL = 2.0  # 초
 MEMORY_REPORT_INTERVAL = 10.0  # 초
 MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024  # 8MB
 DANGEROUS_EXTENSIONS = ['.env', '.pem', '.key', '.crt', '.p12', '.pfx']
+
+# 컨텍스트 관련 상수
+DEFAULT_MAX_CONTEXT_TOKENS = 200000  # 기본 컨텍스트 윈도우 크기
 
 
 @dataclass
@@ -250,6 +254,42 @@ class ClaudeCodeRunner:
             return f"""[사용자 개입 메시지 from {msg.user}]
 {msg.text}"""
 
+    def _extract_context_usage(self, usage: Optional[dict]) -> Optional[ContextUsageEvent]:
+        """
+        ResultMessage.usage에서 컨텍스트 사용량 추출
+
+        Args:
+            usage: ResultMessage.usage 딕셔너리
+
+        Returns:
+            ContextUsageEvent 또는 None
+        """
+        if not usage:
+            return None
+
+        # 입력 토큰 수 추출 (다양한 필드 시도)
+        input_tokens = usage.get("input_tokens", 0)
+        cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
+        cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+
+        # 총 입력 토큰 계산
+        used_tokens = input_tokens + cache_creation_tokens + cache_read_tokens
+
+        if used_tokens <= 0:
+            return None
+
+        # 최대 토큰 추출 (없으면 기본값 사용)
+        max_tokens = usage.get("context_window", DEFAULT_MAX_CONTEXT_TOKENS)
+
+        # 사용 퍼센트 계산
+        percent = (used_tokens / max_tokens) * 100 if max_tokens > 0 else 0
+
+        return ContextUsageEvent(
+            used_tokens=used_tokens,
+            max_tokens=max_tokens,
+            percent=round(percent, 1)
+        )
+
     async def execute(
         self,
         prompt: str,
@@ -267,7 +307,7 @@ class ClaudeCodeRunner:
             on_intervention_sent: 개입 메시지 전송 후 콜백
 
         Yields:
-            ProgressEvent | MemoryEvent | InterventionSentEvent | CompleteEvent | ErrorEvent
+            ProgressEvent | MemoryEvent | InterventionSentEvent | ContextUsageEvent | CompleteEvent | ErrorEvent
         """
         if not SDK_AVAILABLE:
             yield ErrorEvent(message="Claude Agent SDK not available")
@@ -288,6 +328,7 @@ class ClaudeCodeRunner:
         accumulated_text = ""
         current_text = ""
         session_id = None
+        context_usage_event = None
         last_update_time = asyncio.get_event_loop().time()
         memory_reported_since_progress = False
 
@@ -311,6 +352,14 @@ class ClaudeCodeRunner:
                         session_id = message.session_id
                         if message.result:
                             accumulated_text = message.result
+
+                        # 컨텍스트 사용량 추출
+                        context_usage_event = self._extract_context_usage(message.usage)
+                        if context_usage_event:
+                            logger.info(
+                                f"Context usage: {context_usage_event.used_tokens}/{context_usage_event.max_tokens} "
+                                f"({context_usage_event.percent}%)"
+                            )
                         break
 
                     # 진행 상황 업데이트
@@ -355,6 +404,10 @@ class ClaudeCodeRunner:
                                 user=msg.user,
                                 text=msg.text
                             )
+
+            # 컨텍스트 사용량 이벤트 전송 (결과 전에)
+            if context_usage_event:
+                yield context_usage_event
 
             # 최종 결과
             final_text = accumulated_text or current_text
