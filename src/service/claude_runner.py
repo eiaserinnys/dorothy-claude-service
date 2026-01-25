@@ -20,7 +20,6 @@ try:
         TextBlock,
         ToolUseBlock,
         ResultMessage,
-        SystemMessage,
         ProcessError,
         CLINotFoundError,
     )
@@ -40,8 +39,6 @@ except ImportError:
     class ClaudeAgentOptions:
         pass
     class HookMatcher:
-        pass
-    class SystemMessage:
         pass
 
 from src.models import (
@@ -226,8 +223,18 @@ class ClaudeCodeRunner:
 
         return None
 
-    def _create_options(self, resume_session_id: Optional[str] = None) -> "ClaudeAgentOptions":
-        """ClaudeAgentOptions 생성"""
+    def _create_options(
+        self,
+        resume_session_id: Optional[str] = None,
+        compact_events: Optional[List] = None
+    ) -> "ClaudeAgentOptions":
+        """
+        ClaudeAgentOptions 생성
+
+        Args:
+            resume_session_id: 이전 세션 ID
+            compact_events: 컴팩트 이벤트를 저장할 리스트 (PreCompact 훅에서 사용)
+        """
         if not SDK_AVAILABLE:
             raise RuntimeError("Claude Agent SDK not available")
 
@@ -241,6 +248,33 @@ class ClaudeCodeRunner:
         for key in keys_to_remove:
             env.pop(key, None)
 
+        # PreCompact 훅 설정
+        hooks = None
+        if compact_events is not None:
+            async def on_pre_compact(
+                hook_input: HookInput,
+                tool_use_id: Optional[str],
+                context: HookContext
+            ) -> HookJSONOutput:
+                """PreCompact 훅 콜백 - 컴팩트 실행 전 호출됨"""
+                trigger = hook_input.get("trigger", "auto")
+                logger.info(f"PreCompact hook triggered: trigger={trigger}")
+                compact_events.append(CompactEvent(
+                    trigger=trigger,
+                    message=f"컨텍스트 컴팩트 실행됨 (트리거: {trigger})"
+                ))
+                # 컴팩트 계속 진행
+                return SyncHookJSONOutput(continue_=True)
+
+            hooks = {
+                "PreCompact": [
+                    HookMatcher(
+                        matcher=None,  # 모든 PreCompact 이벤트에 매칭
+                        hooks=[on_pre_compact]
+                    )
+                ]
+            }
+
         options = ClaudeAgentOptions(
             allowed_tools=ALLOWED_TOOLS,
             disallowed_tools=DISALLOWED_TOOLS,
@@ -248,6 +282,7 @@ class ClaudeCodeRunner:
             cwd=self._workspace_dir,
             env=env,
             setting_sources=['project'],  # CLAUDE.md 로드
+            hooks=hooks,
         )
 
         if resume_session_id:
@@ -354,15 +389,16 @@ class ClaudeCodeRunner:
                 )
                 return
 
-        options = self._create_options(resume_session_id)
-
         accumulated_text = ""
         current_text = ""
         session_id = None
         context_usage_event = None
-        compact_events = []  # 컴팩트 이벤트 저장
+        compact_events: List[CompactEvent] = []  # PreCompact 훅에서 채워짐
         last_update_time = asyncio.get_event_loop().time()
         memory_reported_since_progress = False
+
+        # compact_events 리스트를 전달하여 PreCompact 훅 설정
+        options = self._create_options(resume_session_id, compact_events)
 
         try:
             async with ClaudeSDKClient(options=options) as client:
@@ -378,19 +414,6 @@ class ClaudeCodeRunner:
                                 current_text = block.text
                             elif isinstance(block, ToolUseBlock):
                                 logger.debug(f"Tool use: {block.name}")
-
-                    # SystemMessage 처리 (컴팩트 이벤트 감지)
-                    elif isinstance(message, SystemMessage):
-                        logger.debug(f"SystemMessage: subtype={message.subtype}, data={message.data}")
-
-                        # 컴팩트 관련 시스템 메시지 감지
-                        if message.subtype == "compact" or "compact" in str(message.data).lower():
-                            trigger = message.data.get("trigger", "auto")
-                            compact_events.append(CompactEvent(
-                                trigger=trigger,
-                                message=f"컨텍스트 컴팩트 실행됨 (트리거: {trigger})"
-                            ))
-                            logger.info(f"Compact detected: trigger={trigger}")
 
                     # ResultMessage에서 세션 ID와 최종 결과 추출
                     elif isinstance(message, ResultMessage):
