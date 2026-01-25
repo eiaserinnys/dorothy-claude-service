@@ -36,8 +36,11 @@ class DiscordNotifier:
 
     @property
     def is_enabled(self) -> bool:
-        """웹훅이 설정되었는지 확인"""
-        return bool(self._settings.discord_webhook_url)
+        """웹훅이 설정되었고 프로덕션 환경인지 확인
+
+        개발 환경에서는 웹훅을 발송하지 않음.
+        """
+        return bool(self._settings.discord_webhook_url) and self._settings.is_production
 
     @property
     def webhook_url(self) -> str:

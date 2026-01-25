@@ -14,13 +14,16 @@ def mock_settings():
     """Mock settings"""
     settings = MagicMock()
     settings.discord_webhook_url = ""
+    settings.is_production = False
+    settings.environment = "development"
     return settings
 
 
 @pytest.fixture
 def notifier_disabled(mock_settings):
-    """웹훅 비활성화된 notifier"""
+    """웹훅 비활성화된 notifier (URL 없음)"""
     mock_settings.discord_webhook_url = ""
+    mock_settings.is_production = True
 
     with patch('src.service.discord_notifier.get_settings', return_value=mock_settings):
         from src.service.discord_notifier import DiscordNotifier
@@ -29,8 +32,21 @@ def notifier_disabled(mock_settings):
 
 @pytest.fixture
 def notifier_enabled(mock_settings):
-    """웹훅 활성화된 notifier"""
+    """웹훅 활성화된 notifier (프로덕션 + URL 설정)"""
     mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/123/abc"
+    mock_settings.is_production = True
+
+    with patch('src.service.discord_notifier.get_settings', return_value=mock_settings):
+        from src.service.discord_notifier import DiscordNotifier
+        return DiscordNotifier()
+
+
+@pytest.fixture
+def notifier_dev_with_url(mock_settings):
+    """개발 환경에서 URL 설정된 notifier (비활성화 되어야 함)"""
+    mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/123/abc"
+    mock_settings.is_production = False
+    mock_settings.environment = "development"
 
     with patch('src.service.discord_notifier.get_settings', return_value=mock_settings):
         from src.service.discord_notifier import DiscordNotifier
@@ -41,12 +57,16 @@ class TestIsEnabled:
     """is_enabled 프로퍼티 테스트"""
 
     def test_disabled_when_url_empty(self, notifier_disabled):
-        """URL이 비어있으면 비활성화"""
+        """URL이 비어있으면 비활성화 (프로덕션이어도)"""
         assert notifier_disabled.is_enabled is False
 
-    def test_enabled_when_url_set(self, notifier_enabled):
-        """URL이 설정되면 활성화"""
+    def test_enabled_when_url_set_and_production(self, notifier_enabled):
+        """URL이 설정되고 프로덕션이면 활성화"""
         assert notifier_enabled.is_enabled is True
+
+    def test_disabled_in_development_with_url(self, notifier_dev_with_url):
+        """개발 환경에서는 URL이 설정되어도 비활성화"""
+        assert notifier_dev_with_url.is_enabled is False
 
 
 class TestSendDisabled:
@@ -54,8 +74,14 @@ class TestSendDisabled:
 
     @pytest.mark.asyncio
     async def test_send_returns_false_when_disabled(self, notifier_disabled):
-        """비활성화 시 False 반환"""
+        """비활성화 시 False 반환 (URL 없음)"""
         result = await notifier_disabled._send("test message")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_send_returns_false_in_development(self, notifier_dev_with_url):
+        """개발 환경에서는 URL이 있어도 False 반환"""
+        result = await notifier_dev_with_url._send("test message")
         assert result is False
 
 
