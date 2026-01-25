@@ -440,7 +440,7 @@ class TaskManager:
                 return False
 
             task.listeners.append(queue)
-            logger.debug(f"Added listener to task {key}, total: {len(task.listeners)}")
+            logger.info(f"[LISTENER] Added listener to task {key}, total: {len(task.listeners)}")
         return True
 
     async def remove_listener(self, client_id: str, request_id: str, queue: asyncio.Queue) -> None:
@@ -450,7 +450,7 @@ class TaskManager:
             task = self._tasks.get(key)
             if task and queue in task.listeners:
                 task.listeners.remove(queue)
-                logger.debug(f"Removed listener from task {key}, remaining: {len(task.listeners)}")
+                logger.info(f"[LISTENER] Removed listener from task {key}, remaining: {len(task.listeners)}")
 
     async def broadcast(self, client_id: str, request_id: str, event: dict) -> int:
         """
@@ -471,6 +471,10 @@ class TaskManager:
                 count += 1
             except Exception as e:
                 logger.warning(f"Failed to broadcast to listener: {e}")
+
+        if count > 0:
+            event_type = event.get("type", "unknown")
+            logger.info(f"[BROADCAST] {key} -> {count} listener(s), event={event_type}")
 
         return count
 
