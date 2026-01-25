@@ -392,6 +392,11 @@ class TaskManager:
                 logger.warning(f"Task not found for ack: {key}")
                 return False
 
+            # intervention_queue 정리 (메모리 릭 방지)
+            self._clear_queue(task.intervention_queue)
+            # listeners 정리
+            task.listeners.clear()
+
             logger.info(f"Acked task: {key}")
 
         await self._schedule_save()
@@ -429,21 +434,23 @@ class TaskManager:
             성공 여부 (태스크 존재 여부)
         """
         key = f"{client_id}:{request_id}"
-        task = self._tasks.get(key)
-        if not task:
-            return False
+        async with self._lock:
+            task = self._tasks.get(key)
+            if not task:
+                return False
 
-        task.listeners.append(queue)
-        logger.debug(f"Added listener to task {key}, total: {len(task.listeners)}")
+            task.listeners.append(queue)
+            logger.debug(f"Added listener to task {key}, total: {len(task.listeners)}")
         return True
 
     async def remove_listener(self, client_id: str, request_id: str, queue: asyncio.Queue) -> None:
         """SSE 리스너 제거"""
         key = f"{client_id}:{request_id}"
-        task = self._tasks.get(key)
-        if task and queue in task.listeners:
-            task.listeners.remove(queue)
-            logger.debug(f"Removed listener from task {key}, remaining: {len(task.listeners)}")
+        async with self._lock:
+            task = self._tasks.get(key)
+            if task and queue in task.listeners:
+                task.listeners.remove(queue)
+                logger.debug(f"Removed listener from task {key}, remaining: {len(task.listeners)}")
 
     async def broadcast(self, client_id: str, request_id: str, event: dict) -> int:
         """
@@ -759,8 +766,18 @@ class TaskManager:
         async with self._lock:
             keys_to_remove = []
             for key, task in self._tasks.items():
-                # running 태스크는 정리하지 않음
+                # RUNNING 상태 태스크 처리
                 if task.status == TaskStatus.RUNNING:
+                    # execution_task가 없거나 완료된 경우 (orphaned task)
+                    if task.execution_task is None or task.execution_task.done():
+                        # 오래된 orphaned task는 에러로 전환 후 정리 대상
+                        if task.created_at < cutoff:
+                            task.status = TaskStatus.ERROR
+                            task.error = "실행 태스크 없이 오래된 running 상태 (orphaned)"
+                            task.completed_at = utc_now()
+                            keys_to_remove.append(key)
+                            logger.warning(f"Cleaning up orphaned running task: {key}")
+                    # 활성 실행 중인 태스크는 정리하지 않음
                     continue
 
                 # 오래된 태스크 정리
@@ -768,6 +785,11 @@ class TaskManager:
                     keys_to_remove.append(key)
 
             for key in keys_to_remove:
+                task = self._tasks[key]
+                # intervention_queue 정리 (메모리 릭 방지)
+                self._clear_queue(task.intervention_queue)
+                # listeners 정리
+                task.listeners.clear()
                 del self._tasks[key]
                 cleaned += 1
 
@@ -776,6 +798,14 @@ class TaskManager:
             await self._schedule_save()
 
         return cleaned
+
+    def _clear_queue(self, queue: asyncio.Queue) -> None:
+        """큐 내 모든 항목 제거"""
+        try:
+            while True:
+                queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
 
     def get_stats(self) -> dict:
         """통계 반환"""

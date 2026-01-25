@@ -87,6 +87,9 @@ async def lifespan(app: FastAPI):
     uptime = int(time.time() - _start_time)
     await discord_notifier.notify_shutdown(uptime_seconds=uptime)
 
+    # Discord notifier 세션 정리 (aiohttp ClientSession)
+    await discord_notifier.close()
+
     # 주기적 정리 태스크 중지
     if _cleanup_task:
         _cleanup_task.cancel()

@@ -386,17 +386,44 @@ class TestTaskManagerCleanup:
         assert await task_manager.get_task("client", "req1") is not None
 
     @pytest.mark.asyncio
-    async def test_cleanup_keeps_running_tasks(self, task_manager):
-        """running 태스크는 시간이 지나도 정리 안 함"""
+    async def test_cleanup_keeps_active_running_tasks(self, task_manager):
+        """활성 실행 중인 running 태스크는 시간이 지나도 정리 안 함"""
         from src.service.task_manager import utc_now
 
         task = await task_manager.create_task("client", "req1", "prompt")
         task.created_at = utc_now() - timedelta(hours=25)
 
+        # 활성 execution_task 시뮬레이션 (실제 실행 중인 태스크)
+        async def dummy_execution():
+            await asyncio.sleep(10)
+
+        task.execution_task = asyncio.create_task(dummy_execution())
+
+        try:
+            cleaned = await task_manager.cleanup_old_tasks(max_age_hours=24)
+
+            assert cleaned == 0
+            assert await task_manager.get_task("client", "req1") is not None
+        finally:
+            task.execution_task.cancel()
+            try:
+                await task.execution_task
+            except asyncio.CancelledError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_orphaned_running_tasks(self, task_manager):
+        """orphaned running 태스크(execution_task 없음)는 오래되면 정리"""
+        from src.service.task_manager import utc_now
+
+        task = await task_manager.create_task("client", "req1", "prompt")
+        task.created_at = utc_now() - timedelta(hours=25)
+        # execution_task가 None인 상태 (orphaned)
+
         cleaned = await task_manager.cleanup_old_tasks(max_age_hours=24)
 
-        assert cleaned == 0
-        assert await task_manager.get_task("client", "req1") is not None
+        assert cleaned == 1
+        assert await task_manager.get_task("client", "req1") is None
 
 
 class TestTaskManagerAdditional:
