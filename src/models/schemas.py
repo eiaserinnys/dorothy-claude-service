@@ -118,6 +118,13 @@ class ContextUsageEvent(BaseModel):
     percent: float = Field(..., description="사용 퍼센트 (0-100)")
 
 
+class CompactEvent(BaseModel):
+    """컴팩트 실행 이벤트"""
+    type: str = "compact"
+    trigger: str = Field(..., description="트리거 타입 (manual 또는 auto)")
+    message: str = Field(..., description="컴팩트 상태 메시지")
+
+
 # === Task API Models ===
 
 class TaskStatus(str, Enum):

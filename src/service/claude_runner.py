@@ -20,8 +20,16 @@ try:
         TextBlock,
         ToolUseBlock,
         ResultMessage,
+        SystemMessage,
         ProcessError,
         CLINotFoundError,
+    )
+    from claude_agent_sdk.types import (
+        HookMatcher,
+        HookInput,
+        HookContext,
+        HookJSONOutput,
+        SyncHookJSONOutput,
     )
     SDK_AVAILABLE = True
 except ImportError:
@@ -31,6 +39,10 @@ except ImportError:
         pass
     class ClaudeAgentOptions:
         pass
+    class HookMatcher:
+        pass
+    class SystemMessage:
+        pass
 
 from src.models import (
     ProgressEvent,
@@ -39,6 +51,7 @@ from src.models import (
     CompleteEvent,
     ErrorEvent,
     ContextUsageEvent,
+    CompactEvent,
 )
 from src.service.resource_manager import resource_manager
 
@@ -259,6 +272,9 @@ class ClaudeCodeRunner:
         """
         ResultMessage.usage에서 컨텍스트 사용량 추출
 
+        Claude Agent SDK의 usage 딕셔너리는 세션 전체의 누적 토큰을 포함할 수 있음.
+        따라서 마지막 요청의 토큰만 추출하여 표시.
+
         Args:
             usage: ResultMessage.usage 딕셔너리
 
@@ -268,25 +284,39 @@ class ClaudeCodeRunner:
         if not usage:
             return None
 
-        # 입력 토큰 수 추출 (다양한 필드 시도)
+        # 디버그: 실제 usage 필드 구조 로깅
+        logger.debug(f"Usage dict keys: {list(usage.keys())}")
+        logger.debug(f"Usage dict: {usage}")
+
+        # 입력 토큰 수 추출
+        # Anthropic API usage 구조: input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens
         input_tokens = usage.get("input_tokens", 0)
-        cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
-        cache_read_tokens = usage.get("cache_read_input_tokens", 0)
 
-        # 총 입력 토큰 계산
-        used_tokens = input_tokens + cache_creation_tokens + cache_read_tokens
+        # 캐시 토큰은 input_tokens에 포함되지 않으므로 별도 합산하지 않음
+        # input_tokens가 이미 실제 "새로 처리된" 토큰 수임
+        # cache_read_input_tokens는 캐시에서 읽은 토큰 (이미 처리됨)
+        # cache_creation_input_tokens는 캐시 생성에 사용된 토큰
 
-        if used_tokens <= 0:
+        # 현재 컨텍스트 사용량 = input_tokens (마지막 요청)
+        # 컨텍스트 윈도우 제한에 대한 비율을 계산하려면 전체 대화의 토큰이 필요
+        # SDK의 usage는 단일 요청의 usage일 수 있음
+
+        if input_tokens <= 0:
             return None
 
-        # 최대 토큰 추출 (없으면 기본값 사용)
-        max_tokens = usage.get("context_window", DEFAULT_MAX_CONTEXT_TOKENS)
+        # 모델별 컨텍스트 윈도우 크기 (Claude 3.5/4 Sonnet은 200k)
+        max_tokens = DEFAULT_MAX_CONTEXT_TOKENS
 
         # 사용 퍼센트 계산
-        percent = (used_tokens / max_tokens) * 100 if max_tokens > 0 else 0
+        percent = (input_tokens / max_tokens) * 100 if max_tokens > 0 else 0
+
+        logger.info(
+            f"Context usage calculation: input_tokens={input_tokens}, "
+            f"max_tokens={max_tokens}, percent={percent:.1f}%"
+        )
 
         return ContextUsageEvent(
-            used_tokens=used_tokens,
+            used_tokens=input_tokens,
             max_tokens=max_tokens,
             percent=round(percent, 1)
         )
@@ -330,6 +360,7 @@ class ClaudeCodeRunner:
         current_text = ""
         session_id = None
         context_usage_event = None
+        compact_events = []  # 컴팩트 이벤트 저장
         last_update_time = asyncio.get_event_loop().time()
         memory_reported_since_progress = False
 
@@ -347,6 +378,19 @@ class ClaudeCodeRunner:
                                 current_text = block.text
                             elif isinstance(block, ToolUseBlock):
                                 logger.debug(f"Tool use: {block.name}")
+
+                    # SystemMessage 처리 (컴팩트 이벤트 감지)
+                    elif isinstance(message, SystemMessage):
+                        logger.debug(f"SystemMessage: subtype={message.subtype}, data={message.data}")
+
+                        # 컴팩트 관련 시스템 메시지 감지
+                        if message.subtype == "compact" or "compact" in str(message.data).lower():
+                            trigger = message.data.get("trigger", "auto")
+                            compact_events.append(CompactEvent(
+                                trigger=trigger,
+                                message=f"컨텍스트 컴팩트 실행됨 (트리거: {trigger})"
+                            ))
+                            logger.info(f"Compact detected: trigger={trigger}")
 
                     # ResultMessage에서 세션 ID와 최종 결과 추출
                     elif isinstance(message, ResultMessage):
@@ -405,6 +449,10 @@ class ClaudeCodeRunner:
                                 user=msg.user,
                                 text=msg.text
                             )
+
+            # 컴팩트 이벤트 전송 (먼저)
+            for compact_event in compact_events:
+                yield compact_event
 
             # 컨텍스트 사용량 이벤트 전송 (결과 전에)
             if context_usage_event:

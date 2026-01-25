@@ -14,6 +14,7 @@ from .schemas import (
     CompleteEvent,
     ErrorEvent,
     ContextUsageEvent,
+    CompactEvent,
     # Task API
     TaskStatus,
     ExecuteRequest,
@@ -37,6 +38,7 @@ __all__ = [
     "CompleteEvent",
     "ErrorEvent",
     "ContextUsageEvent",
+    "CompactEvent",
     # Task API
     "TaskStatus",
     "ExecuteRequest",
