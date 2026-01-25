@@ -65,8 +65,9 @@ DISALLOWED_TOOLS = ["NotebookEdit", "TodoWrite"]
 EXECUTION_TIMEOUT = 600  # 10분
 STREAM_UPDATE_INTERVAL = 2.0  # 초
 MEMORY_REPORT_INTERVAL = 10.0  # 초
-MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024  # 8MB
-DANGEROUS_EXTENSIONS = ['.env', '.pem', '.key', '.crt', '.p12', '.pfx']
+
+# 공통 상수는 constants 모듈에서 import
+from src.constants import MAX_ATTACHMENT_SIZE, DANGEROUS_EXTENSIONS
 
 # 컨텍스트 관련 상수
 DEFAULT_MAX_CONTEXT_TOKENS = 200000  # 기본 컨텍스트 윈도우 크기
@@ -207,7 +208,6 @@ class ClaudeCodeRunner:
             에러 메시지 (유효하면 None)
         """
         # 기본 형식 검증 (UUID 형식)
-        import re
         uuid_pattern = re.compile(
             r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
             re.IGNORECASE

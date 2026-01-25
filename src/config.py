@@ -11,6 +11,26 @@ from functools import lru_cache
 from dataclasses import dataclass
 from typing import Optional
 
+_config_logger = logging.getLogger(__name__)
+
+
+def _safe_int(value: str, default: int, name: str) -> int:
+    """환경변수를 안전하게 int로 변환
+
+    Args:
+        value: 변환할 문자열
+        default: 변환 실패 시 기본값
+        name: 환경변수 이름 (로깅용)
+
+    Returns:
+        변환된 int 값 또는 기본값
+    """
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        _config_logger.warning(f"Invalid {name} value '{value}', using default: {default}")
+        return default
+
 
 @dataclass
 class Settings:
@@ -54,15 +74,27 @@ class Settings:
             version=os.getenv("SERVICE_VERSION", cls.version),
             environment=os.getenv("ENVIRONMENT", cls.environment),
             host=os.getenv("HOST", cls.host),
-            port=int(os.getenv("PORT", cls.port)),
+            port=_safe_int(os.getenv("PORT", str(cls.port)), cls.port, "PORT"),
             claude_service_token=os.getenv("CLAUDE_SERVICE_TOKEN", ""),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             workspace_dir=os.getenv("WORKSPACE_DIR", cls.workspace_dir),
-            max_concurrent_sessions=int(os.getenv("MAX_CONCURRENT_SESSIONS", cls.max_concurrent_sessions)),
-            session_timeout_seconds=int(os.getenv("SESSION_TIMEOUT_SECONDS", cls.session_timeout_seconds)),
+            max_concurrent_sessions=_safe_int(
+                os.getenv("MAX_CONCURRENT_SESSIONS", str(cls.max_concurrent_sessions)),
+                cls.max_concurrent_sessions,
+                "MAX_CONCURRENT_SESSIONS"
+            ),
+            session_timeout_seconds=_safe_int(
+                os.getenv("SESSION_TIMEOUT_SECONDS", str(cls.session_timeout_seconds)),
+                cls.session_timeout_seconds,
+                "SESSION_TIMEOUT_SECONDS"
+            ),
             log_level=os.getenv("LOG_LEVEL", cls.log_level),
             log_format=os.getenv("LOG_FORMAT", cls.log_format),
-            health_check_interval=int(os.getenv("HEALTH_CHECK_INTERVAL", cls.health_check_interval)),
+            health_check_interval=_safe_int(
+                os.getenv("HEALTH_CHECK_INTERVAL", str(cls.health_check_interval)),
+                cls.health_check_interval,
+                "HEALTH_CHECK_INTERVAL"
+            ),
             discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", ""),
         )
 

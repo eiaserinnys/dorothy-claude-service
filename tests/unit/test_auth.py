@@ -15,9 +15,12 @@ class TestVerifyToken:
     @pytest.mark.asyncio
     async def test_dev_mode_no_token_configured(self):
         """개발 모드: 토큰이 설정되지 않으면 인증 우회"""
-        with patch.dict('os.environ', {'CLAUDE_SERVICE_TOKEN': ''}, clear=False):
+        with patch.dict('os.environ', {'CLAUDE_SERVICE_TOKEN': '', 'ENVIRONMENT': 'development'}, clear=False):
             import importlib
             import src.api.auth as auth_module
+            import src.config as config_module
+            # 캐시된 설정을 클리어
+            config_module.get_settings.cache_clear()
             importlib.reload(auth_module)
 
             result = await auth_module.verify_token(None)

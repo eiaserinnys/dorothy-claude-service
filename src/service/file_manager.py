@@ -11,11 +11,11 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 
+from src.constants import MAX_ATTACHMENT_SIZE, DANGEROUS_EXTENSIONS
+
 
 # 기본 설정
 DEFAULT_ATTACHMENT_DIR = "/tmp/claude-code-attachments"
-MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024  # 8MB
-DANGEROUS_EXTENSIONS = ['.env', '.pem', '.key', '.crt', '.p12', '.pfx', '.jks']
 
 
 class AttachmentError(Exception):
@@ -215,8 +215,6 @@ class FileManager:
         Returns:
             삭제된 디렉토리 수
         """
-        import time
-
         max_age_seconds = max_age_hours * 3600
         current_time = time.time()
         cleaned = 0

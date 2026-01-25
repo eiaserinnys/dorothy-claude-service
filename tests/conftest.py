@@ -2,8 +2,30 @@
 Test fixtures and configuration
 """
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def reset_settings():
+    """각 테스트 전에 설정 캐시 클리어"""
+    # 테스트 환경에서는 개발 모드로 설정 (프로덕션 인증 우회)
+    original_env = os.environ.get('ENVIRONMENT')
+    os.environ['ENVIRONMENT'] = 'development'
+
+    from src.config import get_settings
+    get_settings.cache_clear()
+
+    yield
+
+    # 테스트 후에 원래 환경 복원
+    if original_env is not None:
+        os.environ['ENVIRONMENT'] = original_env
+    elif 'ENVIRONMENT' in os.environ:
+        del os.environ['ENVIRONMENT']
+
+    get_settings.cache_clear()
 
 
 @pytest.fixture

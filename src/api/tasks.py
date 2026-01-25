@@ -22,6 +22,7 @@ from src.models import (
 )
 from src.service.task_manager import (
     get_task_manager,
+    Task,
     TaskConflictError,
     TaskNotFoundError,
     TaskNotRunningError,
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def task_to_response(task) -> TaskResponse:
+def task_to_response(task: Task) -> TaskResponse:
     """Task를 TaskResponse로 변환"""
     from src.models import TaskStatus as ResponseTaskStatus
     return TaskResponse(

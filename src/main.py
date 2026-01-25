@@ -104,7 +104,7 @@ async def lifespan(app: FastAPI):
         cancelled = await task_manager.cancel_running_tasks(timeout=5.0)
         if cancelled > 0:
             logger.info(f"  Cancelled {cancelled} running tasks")
-        await task_manager._save()
+        await task_manager.save()
         logger.info("  Saved tasks to storage")
     except RuntimeError:
         pass  # TaskManager가 초기화되지 않은 경우
@@ -128,7 +128,18 @@ app = FastAPI(
 # CORS 설정
 # 프로덕션: localhost만 허용 (같은 서버에서만 접근)
 # 개발: 모든 origin 허용
-_allowed_origins = ["http://localhost:*", "http://127.0.0.1:*"] if settings.is_production else ["*"]
+if settings.is_production:
+    # 프로덕션에서는 명시적인 포트 목록 사용
+    # 와일드카드 패턴은 CORS 미들웨어에서 지원되지 않음
+    _allowed_origins = [
+        "http://localhost:8080",
+        "http://localhost:3000",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:3000",
+    ]
+else:
+    _allowed_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
@@ -155,7 +166,7 @@ async def health_check():
 async def get_status():
     """서비스 상태 조회"""
     task_manager = get_task_manager()
-    running_tasks = [t for t in task_manager._tasks.values() if t.status == "running"]
+    running_tasks = task_manager.get_running_tasks()
 
     return {
         "active_tasks": len(running_tasks),
@@ -187,12 +198,20 @@ app.include_router(attachments_router, prefix="/attachments", tags=["attachments
 async def global_exception_handler(request: Request, exc: Exception):
     """전역 예외 핸들러"""
     logger.exception(f"Unhandled exception: {exc}")
+
+    # 프로덕션에서는 내부 정보 노출 방지
+    error_message = (
+        "Internal server error"
+        if settings.is_production
+        else str(exc)
+    )
+
     return JSONResponse(
         status_code=500,
         content={
             "error": {
                 "code": "INTERNAL_ERROR",
-                "message": str(exc),
+                "message": error_message,
                 "details": {},
             }
         },

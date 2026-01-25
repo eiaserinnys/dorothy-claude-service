@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Any
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 
 from src.service.discord_notifier import discord_notifier
@@ -218,6 +218,14 @@ class TaskManager:
 
         except Exception as e:
             logger.error(f"Failed to save tasks: {e}")
+
+    async def save(self) -> None:
+        """태스크 상태 저장 (public interface)"""
+        await self._save()
+
+    def get_running_tasks(self) -> List[Task]:
+        """실행 중인 태스크 목록 반환"""
+        return [t for t in self._tasks.values() if t.status == TaskStatus.RUNNING]
 
     async def _schedule_save(self) -> None:
         """저장 예약 (debounce)"""

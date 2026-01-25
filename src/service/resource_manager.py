@@ -110,20 +110,20 @@ class ResourceManager:
 
     def try_acquire(self) -> bool:
         """
-        리소스 획득 시도 (non-blocking)
+        리소스 획득 시도 (non-blocking, 동기 버전)
+
+        Note: 이 메서드는 동기적으로 호출됩니다.
+        비동기 컨텍스트에서는 acquire() 컨텍스트 매니저를 사용하세요.
 
         Returns:
             True if acquired, False if not available
         """
-        try:
-            # Semaphore의 _value 속성 체크 (asyncio 내부 구현)
-            if self._semaphore._value > 0:
-                self._semaphore._value -= 1
-                self._active_count += 1
-                return True
-            return False
-        except Exception:
-            return False
+        # 별도의 카운터로 관리하여 thread-safety 보장
+        # Semaphore 내부 속성 접근 대신 자체 카운터 사용
+        if self._active_count < self._max_concurrent:
+            self._active_count += 1
+            return True
+        return False
 
     def release(self) -> None:
         """리소스 해제 (try_acquire와 쌍으로 사용)"""
