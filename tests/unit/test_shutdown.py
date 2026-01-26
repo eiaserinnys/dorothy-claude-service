@@ -88,7 +88,7 @@ class TestShutdownTaskCleanup:
 
         # 현재 shutdown 로직 - execution_task를 취소하지 않음
         # (main.py lifespan의 현재 동작 시뮬레이션)
-        await task_manager._save()
+        await task_manager.save()
 
         # 문제: execution_task가 여전히 실행 중
         assert not task.execution_task.done()

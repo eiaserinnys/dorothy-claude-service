@@ -4,123 +4,51 @@ TaskManager - 태스크 라이프사이클 관리
 태스크 기반 아키텍처의 핵심 컴포넌트.
 클라이언트(dorothy_bot 등)의 실행 요청을 태스크로 관리하고,
 결과를 영속화하여 클라이언트 재시작 시에도 복구 가능하게 합니다.
+
+이 모듈은 다음 서브모듈들을 조합합니다:
+- task_models: 데이터 모델 및 예외
+- task_storage: JSON 영속화
+- task_listener: SSE 리스너 관리
+- task_executor: 백그라운드 실행
 """
 
 import asyncio
-import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from pathlib import Path
-from typing import Optional, Dict, List, Any
-from dataclasses import dataclass, field
-from enum import Enum
+from typing import Optional, Dict, List
 
 from src.service.discord_notifier import discord_notifier
 
+# 서브모듈에서 import
+from src.service.task_models import (
+    Task,
+    TaskStatus,
+    TaskConflictError,
+    TaskNotFoundError,
+    TaskNotRunningError,
+    utc_now,
+)
+from src.service.task_storage import TaskStorage
+from src.service.task_listener import TaskListenerManager
+from src.service.task_executor import TaskExecutor
+
+# Re-export for backward compatibility
+__all__ = [
+    "Task",
+    "TaskStatus",
+    "TaskConflictError",
+    "TaskNotFoundError",
+    "TaskNotRunningError",
+    "TaskManager",
+    "task_manager",
+    "get_task_manager",
+    "init_task_manager",
+    "set_task_manager",
+    "utc_now",
+]
+
 logger = logging.getLogger(__name__)
-
-
-class TaskStatus(str, Enum):
-    """태스크 상태"""
-    RUNNING = "running"
-    COMPLETED = "completed"
-    ERROR = "error"
-
-
-class TaskConflictError(Exception):
-    """태스크 충돌 오류 (같은 키로 running 태스크 존재)"""
-    pass
-
-
-class TaskNotFoundError(Exception):
-    """태스크 없음 오류"""
-    pass
-
-
-class TaskNotRunningError(Exception):
-    """태스크가 running 상태가 아님"""
-    pass
-
-
-def utc_now() -> datetime:
-    """현재 UTC 시간 반환"""
-    return datetime.now(timezone.utc)
-
-
-def datetime_to_str(dt: datetime) -> str:
-    """datetime을 ISO 문자열로 변환"""
-    return dt.isoformat()
-
-
-def str_to_datetime(s: str) -> datetime:
-    """ISO 문자열을 datetime으로 변환"""
-    return datetime.fromisoformat(s)
-
-
-@dataclass
-class Task:
-    """태스크 데이터"""
-    client_id: str
-    request_id: str
-    prompt: str
-    status: TaskStatus = TaskStatus.RUNNING
-
-    # Claude Code 관련
-    resume_session_id: Optional[str] = None
-    claude_session_id: Optional[str] = None
-
-    # 결과
-    result: Optional[str] = None
-    error: Optional[str] = None
-    result_delivered: bool = False
-
-    # 타임스탬프
-    created_at: datetime = field(default_factory=utc_now)
-    completed_at: Optional[datetime] = None
-
-    # 런타임 전용 (영속화 안 됨)
-    listeners: List[asyncio.Queue] = field(default_factory=list, repr=False)
-    intervention_queue: asyncio.Queue = field(default_factory=asyncio.Queue, repr=False)
-    execution_task: Optional[asyncio.Task] = field(default=None, repr=False)  # 백그라운드 실행 태스크
-    last_progress_text: Optional[str] = field(default=None, repr=False)  # 마지막 진행 상황 (재연결용)
-
-    @property
-    def key(self) -> str:
-        """태스크 키"""
-        return f"{self.client_id}:{self.request_id}"
-
-    def to_dict(self) -> dict:
-        """영속화용 dict 변환"""
-        return {
-            "client_id": self.client_id,
-            "request_id": self.request_id,
-            "prompt": self.prompt,
-            "status": self.status.value,
-            "resume_session_id": self.resume_session_id,
-            "claude_session_id": self.claude_session_id,
-            "result": self.result,
-            "error": self.error,
-            "result_delivered": self.result_delivered,
-            "created_at": datetime_to_str(self.created_at),
-            "completed_at": datetime_to_str(self.completed_at) if self.completed_at else None,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "Task":
-        """dict에서 복원"""
-        return cls(
-            client_id=data["client_id"],
-            request_id=data["request_id"],
-            prompt=data["prompt"],
-            status=TaskStatus(data["status"]),
-            resume_session_id=data.get("resume_session_id"),
-            claude_session_id=data.get("claude_session_id"),
-            result=data.get("result"),
-            error=data.get("error"),
-            result_delivered=data.get("result_delivered", False),
-            created_at=str_to_datetime(data["created_at"]),
-            completed_at=str_to_datetime(data["completed_at"]) if data.get("completed_at") else None,
-        )
 
 
 class TaskManager:
@@ -131,9 +59,10 @@ class TaskManager:
     1. 태스크 생성/조회/삭제
     2. {client_id, request_id}로 활성 태스크 추적 (중복 방지)
     3. 태스크 상태 업데이트 및 결과 저장
-    4. SSE 리스너 관리
+    4. SSE 리스너 관리 (via TaskListenerManager)
     5. 개입 메시지 큐 관리
-    6. JSON 파일 영속화
+    6. JSON 파일 영속화 (via TaskStorage)
+    7. 백그라운드 실행 (via TaskExecutor)
     """
 
     def __init__(self, storage_path: Optional[Path] = None):
@@ -141,105 +70,40 @@ class TaskManager:
         Args:
             storage_path: 태스크 저장 파일 경로 (None이면 영속화 안 함)
         """
-        # task_key -> Task
+        # 핵심 데이터
         self._tasks: Dict[str, Task] = {}
-        # 영속화 경로
-        self._storage_path = storage_path
-        # Lock for thread-safe operations
         self._lock = asyncio.Lock()
-        # 저장 예약 플래그 (debounce용)
-        self._save_scheduled = False
+
+        # 서브 컴포넌트들
+        self._storage = TaskStorage(storage_path)
+        self._listener_manager = TaskListenerManager(self._tasks)
+        self._executor = TaskExecutor(
+            tasks=self._tasks,
+            listener_manager=self._listener_manager,
+            get_intervention_func=self.get_intervention,
+            complete_task_func=self._complete_task_internal,
+            error_task_func=self._error_task_internal,
+        )
+
+    # === 로드/저장 ===
 
     async def load(self) -> int:
-        """
-        파일에서 태스크 로드
-
-        서비스 시작 시 호출. running 상태의 태스크는 error로 마킹.
-
-        Returns:
-            로드된 태스크 수
-        """
-        if not self._storage_path or not self._storage_path.exists():
-            logger.info("No existing tasks file to load")
-            return 0
-
-        try:
-            data = json.loads(self._storage_path.read_text())
-            tasks_data = data.get("tasks", {})
-
-            loaded = 0
-            for key, task_data in tasks_data.items():
-                try:
-                    task = Task.from_dict(task_data)
-
-                    # running 상태의 태스크는 서비스 재시작으로 중단된 것
-                    if task.status == TaskStatus.RUNNING:
-                        task.status = TaskStatus.ERROR
-                        task.error = "서비스 재시작으로 중단됨"
-                        task.completed_at = utc_now()
-                        logger.warning(f"Marked interrupted task as error: {key}")
-
-                    self._tasks[key] = task
-                    loaded += 1
-                except Exception as e:
-                    logger.error(f"Failed to load task {key}: {e}")
-
-            logger.info(f"Loaded {loaded} tasks from storage")
-
-            # running → error 변경사항 저장
-            await self._save()
-
-            return loaded
-
-        except Exception as e:
-            logger.error(f"Failed to load tasks file: {e}")
-            return 0
-
-    async def _save(self) -> None:
-        """태스크를 파일에 저장"""
-        if not self._storage_path:
-            return
-
-        try:
-            data = {
-                "tasks": {key: task.to_dict() for key, task in self._tasks.items()},
-                "last_saved": datetime_to_str(utc_now()),
-            }
-
-            # 디렉토리 생성
-            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # 임시 파일에 먼저 쓰고 rename (atomic write)
-            temp_path = self._storage_path.with_suffix(".tmp")
-            temp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-            temp_path.rename(self._storage_path)
-
-            logger.debug(f"Saved {len(self._tasks)} tasks to storage")
-
-        except Exception as e:
-            logger.error(f"Failed to save tasks: {e}")
+        """파일에서 태스크 로드"""
+        return await self._storage.load(self._tasks)
 
     async def save(self) -> None:
-        """태스크 상태 저장 (public interface)"""
-        await self._save()
+        """태스크 상태 저장"""
+        await self._storage.save(self._tasks)
+
+    async def _schedule_save(self) -> None:
+        """저장 예약 (debounce)"""
+        await self._storage.schedule_save(self._tasks)
+
+    # === CRUD 작업 ===
 
     def get_running_tasks(self) -> List[Task]:
         """실행 중인 태스크 목록 반환"""
         return [t for t in self._tasks.values() if t.status == TaskStatus.RUNNING]
-
-    async def _schedule_save(self) -> None:
-        """저장 예약 (debounce)"""
-        if self._save_scheduled:
-            return
-
-        self._save_scheduled = True
-
-        async def do_save():
-            await asyncio.sleep(0.5)  # 500ms debounce
-            self._save_scheduled = False
-            await self._save()
-
-        asyncio.create_task(do_save())
 
     async def create_task(
         self,
@@ -266,12 +130,10 @@ class TaskManager:
         key = f"{client_id}:{request_id}"
 
         async with self._lock:
-            # 기존 태스크 확인
             existing = self._tasks.get(key)
             if existing:
                 if existing.status == TaskStatus.RUNNING:
                     raise TaskConflictError(f"Task already running: {key}")
-                # 완료된 태스크가 있으면 덮어쓰기
                 logger.info(f"Overwriting existing task: {key}")
 
             task = Task(
@@ -298,6 +160,16 @@ class TaskManager:
             task for task in self._tasks.values()
             if task.client_id == client_id
         ]
+
+    async def _complete_task_internal(
+        self,
+        client_id: str,
+        request_id: str,
+        result: str,
+        claude_session_id: Optional[str] = None,
+    ) -> Optional[Task]:
+        """태스크 완료 처리 (내부용 - executor에서 호출)"""
+        return await self.complete_task(client_id, request_id, result, claude_session_id)
 
     async def complete_task(
         self,
@@ -331,9 +203,7 @@ class TaskManager:
             task.claude_session_id = claude_session_id
             task.completed_at = utc_now()
 
-            # 소요 시간 계산
             duration_seconds = (task.completed_at - task.created_at).total_seconds()
-
             logger.info(f"Completed task: {key}")
 
         # Discord 알림 (fire-and-forget)
@@ -343,6 +213,15 @@ class TaskManager:
 
         await self._schedule_save()
         return task
+
+    async def _error_task_internal(
+        self,
+        client_id: str,
+        request_id: str,
+        error: str,
+    ) -> Optional[Task]:
+        """태스크 에러 처리 (내부용 - executor에서 호출)"""
+        return await self.error_task(client_id, request_id, error)
 
     async def error_task(
         self,
@@ -432,59 +311,21 @@ class TaskManager:
         await self._schedule_save()
         return True
 
-    # === SSE 리스너 관리 ===
+    # === SSE 리스너 관리 (위임) ===
 
     async def add_listener(self, client_id: str, request_id: str, queue: asyncio.Queue) -> bool:
-        """
-        SSE 리스너 추가
-
-        Returns:
-            성공 여부 (태스크 존재 여부)
-        """
-        key = f"{client_id}:{request_id}"
+        """SSE 리스너 추가"""
         async with self._lock:
-            task = self._tasks.get(key)
-            if not task:
-                return False
-
-            task.listeners.append(queue)
-            logger.info(f"[LISTENER] Added listener to task {key}, total: {len(task.listeners)}")
-        return True
+            return await self._listener_manager.add_listener(client_id, request_id, queue)
 
     async def remove_listener(self, client_id: str, request_id: str, queue: asyncio.Queue) -> None:
         """SSE 리스너 제거"""
-        key = f"{client_id}:{request_id}"
         async with self._lock:
-            task = self._tasks.get(key)
-            if task and queue in task.listeners:
-                task.listeners.remove(queue)
-                logger.info(f"[LISTENER] Removed listener from task {key}, remaining: {len(task.listeners)}")
+            await self._listener_manager.remove_listener(client_id, request_id, queue)
 
     async def broadcast(self, client_id: str, request_id: str, event: dict) -> int:
-        """
-        모든 리스너에게 이벤트 브로드캐스트
-
-        Returns:
-            전송된 리스너 수
-        """
-        key = f"{client_id}:{request_id}"
-        task = self._tasks.get(key)
-        if not task:
-            return 0
-
-        count = 0
-        for queue in task.listeners:
-            try:
-                await queue.put(event)
-                count += 1
-            except Exception as e:
-                logger.warning(f"Failed to broadcast to listener: {e}")
-
-        if count > 0:
-            event_type = event.get("type", "unknown")
-            logger.info(f"[BROADCAST] {key} -> {count} listener(s), event={event_type}")
-
-        return count
+        """모든 리스너에게 이벤트 브로드캐스트"""
+        return await self._listener_manager.broadcast(client_id, request_id, event)
 
     # === 개입 메시지 관리 ===
 
@@ -548,7 +389,7 @@ class TaskManager:
         except asyncio.QueueEmpty:
             return None
 
-    # === 백그라운드 실행 관리 ===
+    # === 백그라운드 실행 관리 (위임) ===
 
     async def start_execution(
         self,
@@ -557,210 +398,30 @@ class TaskManager:
         claude_runner,
         resource_manager,
     ) -> bool:
-        """
-        태스크의 Claude 실행을 백그라운드에서 시작
-
-        SSE 연결과 독립적으로 실행되어, 클라이언트 재연결 시에도
-        실행이 계속됩니다.
-
-        Args:
-            client_id: 클라이언트 ID
-            request_id: 요청 ID
-            claude_runner: ClaudeCodeRunner 인스턴스
-            resource_manager: ResourceManager 인스턴스
-
-        Returns:
-            bool: 성공 여부
-        """
-        key = f"{client_id}:{request_id}"
-        task = self._tasks.get(key)
-        if not task:
-            logger.warning(f"Task not found for execution: {key}")
-            return False
-
-        if task.execution_task is not None:
-            logger.warning(f"Task already executing: {key}")
-            return False
-
-        # 백그라운드 태스크 생성
-        task.execution_task = asyncio.create_task(
-            self._run_execution(
-                task=task,
-                claude_runner=claude_runner,
-                resource_manager=resource_manager,
-            )
+        """태스크의 Claude 실행을 백그라운드에서 시작"""
+        return await self._executor.start_execution(
+            client_id, request_id, claude_runner, resource_manager
         )
-        logger.info(f"Started background execution for task: {key}")
-
-        # Discord 알림 (fire-and-forget)
-        asyncio.create_task(discord_notifier.notify_task_started(client_id, request_id))
-
-        return True
-
-    async def _run_execution(
-        self,
-        task: Task,
-        claude_runner,
-        resource_manager,
-    ) -> None:
-        """백그라운드에서 Claude 실행 및 이벤트 브로드캐스트"""
-        key = task.key
-
-        try:
-            async with resource_manager.acquire(timeout=5.0):
-                # 개입 메시지 가져오기 함수
-                async def get_intervention():
-                    return await self.get_intervention(task.client_id, task.request_id)
-
-                # 개입 메시지 전송 콜백
-                async def on_intervention_sent(user: str, text: str):
-                    event = {"type": "intervention_sent", "user": user, "text": text}
-                    await self.broadcast(task.client_id, task.request_id, event)
-
-                # Claude Code 실행
-                async for event in claude_runner.execute(
-                    prompt=task.prompt,
-                    resume_session_id=task.resume_session_id,
-                    get_intervention=get_intervention,
-                    on_intervention_sent=on_intervention_sent,
-                ):
-                    event_dict = event.model_dump()
-
-                    # 진행 상황 저장 (재연결용)
-                    if event.type == "progress":
-                        task.last_progress_text = event_dict.get("text", "")
-
-                    # 리스너들에게 브로드캐스트
-                    await self.broadcast(task.client_id, task.request_id, event_dict)
-
-                    # 완료 또는 오류 시 태스크 상태 업데이트
-                    if event.type == "complete":
-                        await self.complete_task(
-                            task.client_id,
-                            task.request_id,
-                            result=event.result,
-                            claude_session_id=event.claude_session_id,
-                        )
-                    elif event.type == "error":
-                        await self.error_task(
-                            task.client_id,
-                            task.request_id,
-                            error=event.message,
-                        )
-
-        except RuntimeError as e:
-            # 리소스 획득 실패
-            error_msg = str(e)
-            logger.error(f"Resource acquisition failed for task {key}: {error_msg}")
-            await self.error_task(task.client_id, task.request_id, error=error_msg)
-            # 에러 이벤트 브로드캐스트
-            await self.broadcast(
-                task.client_id, task.request_id,
-                {"type": "error", "message": error_msg}
-            )
-
-        except asyncio.CancelledError:
-            logger.info(f"Task execution cancelled: {key}")
-            raise
-
-        except Exception as e:
-            logger.exception(f"Task execution error for {key}: {e}")
-            error_msg = f"실행 오류: {str(e)}"
-            await self.error_task(task.client_id, task.request_id, error=error_msg)
-            # 에러 이벤트 브로드캐스트
-            await self.broadcast(
-                task.client_id, task.request_id,
-                {"type": "error", "message": error_msg}
-            )
-
-        finally:
-            task.execution_task = None
-            logger.info(f"Background execution finished for task: {key}")
 
     def is_execution_running(self, client_id: str, request_id: str) -> bool:
         """태스크 실행이 진행 중인지 확인"""
-        key = f"{client_id}:{request_id}"
-        task = self._tasks.get(key)
-        return task is not None and task.execution_task is not None
+        return self._executor.is_execution_running(client_id, request_id)
 
-    async def send_reconnect_status(self, client_id: str, request_id: str, queue: asyncio.Queue) -> None:
-        """
-        재연결 시 현재 상태 이벤트 전송
-
-        새로 연결된 리스너에게 현재 태스크 상태를 알려줍니다.
-        """
-        key = f"{client_id}:{request_id}"
-        task = self._tasks.get(key)
-        if not task:
-            return
-
-        # 재연결 알림 이벤트
-        reconnect_event = {
-            "type": "reconnected",
-            "status": task.status.value,
-            "has_execution": task.execution_task is not None,
-        }
-
-        # 마지막 진행 상황이 있으면 포함
-        if task.last_progress_text:
-            reconnect_event["last_progress"] = task.last_progress_text
-
-        try:
-            await queue.put(reconnect_event)
-            logger.debug(f"Sent reconnect status to listener for task {key}")
-
-            # Discord 알림 (fire-and-forget)
-            asyncio.create_task(discord_notifier.notify_reconnect(
-                client_id, request_id,
-                task_status=task.status.value,
-                has_execution=task.execution_task is not None
-            ))
-
-        except Exception as e:
-            logger.warning(f"Failed to send reconnect status: {e}")
+    async def send_reconnect_status(
+        self,
+        client_id: str,
+        request_id: str,
+        queue: asyncio.Queue
+    ) -> None:
+        """재연결 시 현재 상태 이벤트 전송"""
+        await self._executor.send_reconnect_status(client_id, request_id, queue)
 
     # === 정리 ===
 
     async def cancel_running_tasks(self, timeout: float = 5.0) -> int:
-        """
-        실행 중인 모든 태스크 취소
-
-        서비스 shutdown 시 호출하여 고아 프로세스 방지.
-
-        Args:
-            timeout: 취소 대기 시간 (초)
-
-        Returns:
-            취소된 태스크 수
-        """
-        tasks_to_cancel = []
-
+        """실행 중인 모든 태스크 취소"""
         async with self._lock:
-            for key, task in self._tasks.items():
-                if task.execution_task and not task.execution_task.done():
-                    task.execution_task.cancel()
-                    tasks_to_cancel.append((key, task.execution_task))
-                    logger.info(f"Cancelling execution for task: {key}")
-
-        if not tasks_to_cancel:
-            return 0
-
-        # 모든 취소된 태스크 완료 대기 (gather로 병렬 대기)
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    *[t for _, t in tasks_to_cancel],
-                    return_exceptions=True
-                ),
-                timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"Task cancellation timeout after {timeout}s")
-
-        # 취소된 태스크 수 카운트
-        cancelled_count = sum(1 for _, t in tasks_to_cancel if t.done())
-        logger.info(f"Cancelled {cancelled_count}/{len(tasks_to_cancel)} running tasks")
-        return cancelled_count
+            return await self._executor.cancel_running_tasks(timeout)
 
     async def cleanup_old_tasks(self, max_age_hours: int = 24) -> int:
         """
@@ -782,14 +443,12 @@ class TaskManager:
                 if task.status == TaskStatus.RUNNING:
                     # execution_task가 없거나 완료된 경우 (orphaned task)
                     if task.execution_task is None or task.execution_task.done():
-                        # 오래된 orphaned task는 에러로 전환 후 정리 대상
                         if task.created_at < cutoff:
                             task.status = TaskStatus.ERROR
                             task.error = "실행 태스크 없이 오래된 running 상태 (orphaned)"
                             task.completed_at = utc_now()
                             keys_to_remove.append(key)
                             logger.warning(f"Cleaning up orphaned running task: {key}")
-                    # 활성 실행 중인 태스크는 정리하지 않음
                     continue
 
                 # 오래된 태스크 정리
@@ -798,9 +457,7 @@ class TaskManager:
 
             for key in keys_to_remove:
                 task = self._tasks[key]
-                # intervention_queue 정리 (메모리 릭 방지)
                 self._clear_queue(task.intervention_queue)
-                # listeners 정리
                 task.listeners.clear()
                 del self._tasks[key]
                 cleaned += 1
