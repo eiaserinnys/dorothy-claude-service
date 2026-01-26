@@ -11,6 +11,8 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 
+import aiofiles
+
 from src.constants import MAX_ATTACHMENT_SIZE, DANGEROUS_EXTENSIONS
 
 
@@ -113,8 +115,9 @@ class FileManager:
         thread_dir = self.get_thread_dir(thread_id)
         file_path = thread_dir / safe_filename
 
-        # 저장
-        file_path.write_bytes(content)
+        # 저장 (비동기 I/O)
+        async with aiofiles.open(file_path, 'wb') as f:
+            await f.write(content)
 
         # MIME 타입 추측
         content_type, _ = mimetypes.guess_type(filename)
