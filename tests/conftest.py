@@ -4,6 +4,7 @@ Test fixtures and configuration
 
 import os
 import pytest
+from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 
 
@@ -30,11 +31,20 @@ def reset_settings():
 
 @pytest.fixture
 def client():
-    """FastAPI 테스트 클라이언트"""
+    """FastAPI 테스트 클라이언트
+
+    discord_notifier를 mock하여 테스트 중 실제 웹훅 발송 방지.
+    """
     from src.main import app
 
-    with TestClient(app) as client:
-        yield client
+    # discord_notifier의 모든 notify 메서드를 mock
+    with patch('src.main.discord_notifier') as mock_notifier:
+        mock_notifier.notify_startup = AsyncMock(return_value=False)
+        mock_notifier.notify_shutdown = AsyncMock(return_value=False)
+        mock_notifier.close = AsyncMock()
+
+        with TestClient(app) as client:
+            yield client
 
 
 @pytest.fixture
