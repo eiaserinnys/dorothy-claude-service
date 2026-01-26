@@ -335,3 +335,99 @@ class TestSessionValidator:
         result = find_session_file("12345678-1234-1234-1234-123456789012")
         # ~/.claude/projects가 없으면 None 반환
         # (이 테스트는 실제 환경에 따라 결과가 다를 수 있음)
+
+
+class TestExtractContextUsage:
+    """컨텍스트 사용량 추출 테스트"""
+
+    def test_extract_context_usage_with_both_tokens(self, runner):
+        """input_tokens + output_tokens 합산 테스트"""
+        usage = {
+            "input_tokens": 50000,
+            "output_tokens": 10000,
+        }
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is not None
+        assert result.used_tokens == 60000  # 50000 + 10000
+        assert result.max_tokens == 200000
+        assert result.percent == 30.0  # (60000 / 200000) * 100
+
+    def test_extract_context_usage_only_input(self, runner):
+        """output_tokens 없이 input_tokens만 있는 경우"""
+        usage = {
+            "input_tokens": 100000,
+        }
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is not None
+        assert result.used_tokens == 100000
+        assert result.percent == 50.0
+
+    def test_extract_context_usage_only_output(self, runner):
+        """input_tokens 없이 output_tokens만 있는 경우"""
+        usage = {
+            "output_tokens": 20000,
+        }
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is not None
+        assert result.used_tokens == 20000
+        assert result.percent == 10.0
+
+    def test_extract_context_usage_zero_tokens(self, runner):
+        """토큰이 0인 경우 None 반환"""
+        usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is None
+
+    def test_extract_context_usage_empty_dict(self, runner):
+        """빈 딕셔너리인 경우 None 반환"""
+        usage = {}
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is None
+
+    def test_extract_context_usage_none(self, runner):
+        """None인 경우 None 반환"""
+        result = runner._extract_context_usage(None)
+
+        assert result is None
+
+    def test_extract_context_usage_high_usage(self, runner):
+        """80% 이상 사용량 테스트"""
+        usage = {
+            "input_tokens": 150000,
+            "output_tokens": 20000,
+        }
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is not None
+        assert result.used_tokens == 170000
+        assert result.percent == 85.0  # (170000 / 200000) * 100
+
+    def test_extract_context_usage_with_cache_tokens(self, runner):
+        """캐시 토큰이 있어도 input_tokens + output_tokens만 사용"""
+        usage = {
+            "input_tokens": 30000,
+            "output_tokens": 5000,
+            "cache_creation_input_tokens": 1000,
+            "cache_read_input_tokens": 2000,
+        }
+
+        result = runner._extract_context_usage(usage)
+
+        assert result is not None
+        # 캐시 토큰은 무시하고 input + output만 합산
+        assert result.used_tokens == 35000  # 30000 + 5000
+        assert result.percent == 17.5
